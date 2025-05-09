@@ -1,23 +1,23 @@
 {
-    "name": "Soundboard",
+    "name": "Fantasy Soundboard",
     "short_name": "Soundboard",
-    "description": "A personal soundboard app for storing and playing your favorite sounds",
-    "start_url": "/",
+    "description": "A customizable soundboard for games and performances",
+    "theme_color": "#8b5a2b",
+    "background_color": "#f5f5f5",
     "display": "standalone",
-    "background_color": "#f5f5f7",
-    "theme_color": "#3498db",
+    "orientation": "portrait",
+    "scope": "/",
+    "start_url": "/",
     "icons": [
         {
             "src": "icons/icon-192x192.png",
             "sizes": "192x192",
-            "type": "image/png",
-            "purpose": "any maskable"
+            "type": "image/png"
         },
         {
             "src": "icons/icon-512x512.png",
             "sizes": "512x512",
-            "type": "image/png",
-            "purpose": "any maskable"
+            "type": "image/png"
         }
     ]
 } 

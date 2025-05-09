@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="250" fill="#8b5a2b" stroke="#fff" stroke-width="6" />
+  
+  <!-- Sound waves -->
+  <path d="M320 152C342.1 174.1 356 204.3 356 236C356 267.7 342.1 297.9 320 320" stroke="white" stroke-width="16" stroke-linecap="round"/>
+  <path d="M352 120C383.1 151.2 400 191.7 400 236C400 280.3 383.1 320.8 352 352" stroke="white" stroke-width="16" stroke-linecap="round"/>
+  <path d="M384 88C424.1 128.2 448 178.3 448 236C448 293.7 424.1 343.8 384 384" stroke="white" stroke-width="16" stroke-linecap="round"/>
+  
+  <!-- Speaker icon -->
+  <path d="M220 192L160 236H120C113.4 236 108 241.4 108 248V284C108 290.6 113.4 296 120 296H160L220 340C227.4 340 244 336 244 304V228C244 196 227.4 192 220 192Z" fill="#fff"/>
+</svg> 

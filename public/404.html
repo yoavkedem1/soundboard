@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Redirecting...</title>
+  <script>
+    // GitHub Pages SPA redirect hack
+    // Handles 404s by redirecting to the index page with the URL path as a query param
+    // and then history.replaceState to get the correct URL after loading
+    
+    // Determine the base path from the URL: match against the GitHub Pages domain pattern
+    var l = window.location;
+    var repositoryName = l.pathname.split('/')[1];
+    var basePath = '';
+    
+    // Handle GitHub Pages path structure
+    if (l.hostname.includes('github.io')) {
+      basePath = '/' + repositoryName;
+    }
+    
+    // Get the current path excluding the base path
+    var pathname = l.pathname;
+    if (basePath && pathname.startsWith(basePath)) {
+      pathname = pathname.slice(basePath.length);
+    }
+    
+    // Store the full URL minus the base path in sessionStorage
+    var cleanPath = pathname + l.search + l.hash;
+    sessionStorage.setItem('redirect', cleanPath);
+    
+    // Redirect to the root of the app
+    var redirectUrl = basePath + '/';
+    window.location.replace(redirectUrl);
+  </script>
+</head>
+<body>
+  <h1>Redirecting...</h1>
+  <p>If you are not redirected automatically, <a href="/">click here</a>.</p>
+</body>
+</html> 
