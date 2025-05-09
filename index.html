@@ -3,96 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Soundboard</title>
-    <link rel="stylesheet" href="css/styles.css">
-    <link rel="manifest" href="manifest.json">
+    <title>Fantasy Soundboard</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" />
+    <link rel="manifest" href="./manifest.json">
+    <meta name="theme-color" content="#8b5a2b">
+    <meta name="description" content="A customizable fantasy soundboard for games and performances">
+    <link rel="shortcut icon" href="./icons/icon-placeholder.svg" type="image/svg+xml">
+    <!-- GitHub Pages redirect handling -->
+    <script>
+        // Check if we were redirected from a 404 page
+        (function() {
+            var redirect = sessionStorage.getItem('redirect');
+            if (redirect) {
+                sessionStorage.removeItem('redirect');
+                var cleanPath = redirect;
+                if (cleanPath && cleanPath !== '/' && cleanPath !== '/index.html') {
+                    // Get the base URL
+                    var basePath = window.location.pathname;
+                    if (basePath.endsWith('/')) {
+                        basePath = basePath.slice(0, -1);
+                    }
+                    if (basePath.endsWith('/index.html')) {
+                        basePath = basePath.slice(0, -11);
+                    }
+                    
+                    // Use history API to restore the proper URL
+                    history.replaceState(null, null, basePath + cleanPath);
+                }
+            }
+        })();
+    </script>
+    <style>
+        /* Fallback styles when React doesn't load */
+        .fallback-container {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+            margin: 2rem auto;
+            max-width: 600px;
+            font-family: 'Roboto', sans-serif;
+            background-color: #f8f4e5;
+            border-radius: 8px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+        }
+        
+        .fallback-heading {
+            color: #8b5a2b;
+            font-family: 'Cinzel', serif;
+            margin-bottom: 1rem;
+        }
+        
+        .fallback-button {
+            background-color: #8b5a2b;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 1rem;
+            font-weight: bold;
+        }
+        
+        /* Show fallback if page loads for more than 5 seconds without React mounting */
+        body.timeout .fallback-container {
+            display: block;
+        }
+    </style>
 </head>
 <body>
-    <div class="app-container">
-        <header>
-            <h1>Soundboard</h1>
-            <div class="header-controls">
-                <button id="add-sound-btn" class="btn primary">Add Sound</button>
-                <button id="add-group-btn" class="btn">Add Group</button>
-            </div>
-        </header>
+    <div id="root"></div>
+
+    <!-- Fallback content when app doesn't load -->
+    <div class="fallback-container">
+        <h2 class="fallback-heading">Fantasy Soundboard</h2>
+        <p>It seems the app is having trouble loading. This could be due to cached files.</p>
+        <p>Try refreshing the page or clearing your browser cache.</p>
+        <button class="fallback-button" onclick="resetServiceWorker()">Reset App Data</button>
+    </div>
+
+    <!-- JavaScript to handle fallback display -->
+    <script>
+        // Show fallback if page doesn't load properly within 5 seconds
+        setTimeout(function() {
+            if (document.getElementById('root').children.length === 0) {
+                document.body.classList.add('timeout');
+            }
+        }, 5000);
         
-        <div class="groups-container">
-            <div class="groups-list" id="groups-list">
-                <!-- Groups will be added here dynamically -->
-                <div class="group active" data-group-id="all">
-                    <span>All Sounds</span>
-                </div>
-            </div>
-        </div>
+        // Function to reset service worker
+        function resetServiceWorker() {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                    for (let registration of registrations) {
+                        registration.unregister();
+                    }
+                    // Clear cache
+                    if (window.caches) {
+                        caches.keys().then(function(names) {
+                            for (let name of names) {
+                                caches.delete(name);
+                            }
+                        });
+                    }
+                    // Force reload without cache
+                    window.location.reload(true);
+                });
+            } else {
+                window.location.reload(true);
+            }
+        }
+    </script>
 
-        <div class="sounds-container" id="sounds-container">
-            <!-- Sounds will be added here dynamically -->
-            <div class="no-sounds-message">
-                <p>No sounds yet! Click "Add Sound" to get started.</p>
-            </div>
-        </div>
-    </div>
-
-    <!-- Add Sound Modal -->
-    <div class="modal" id="add-sound-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Add New Sound</h2>
-                <button class="close-btn">&times;</button>
-            </div>
-            <div class="modal-body">
-                <form id="add-sound-form">
-                    <div class="form-group">
-                        <label for="sound-name">Name</label>
-                        <input type="text" id="sound-name" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="sound-file">Sound File</label>
-                        <input type="file" id="sound-file" accept="audio/*" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="sound-color">Color</label>
-                        <input type="color" id="sound-color" value="#3498db">
-                    </div>
-                    <div class="form-group">
-                        <label for="sound-group">Group</label>
-                        <select id="sound-group">
-                            <option value="">None</option>
-                            <!-- Groups will be added here dynamically -->
-                        </select>
-                    </div>
-                    <div class="form-actions">
-                        <button type="submit" class="btn primary">Save Sound</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Add Group Modal -->
-    <div class="modal" id="add-group-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Add New Group</h2>
-                <button class="close-btn">&times;</button>
-            </div>
-            <div class="modal-body">
-                <form id="add-group-form">
-                    <div class="form-group">
-                        <label for="group-name">Group Name</label>
-                        <input type="text" id="group-name" required>
-                    </div>
-                    <div class="form-actions">
-                        <button type="submit" class="btn primary">Save Group</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <script src="js/app.js"></script>
-    <script src="js/storage.js"></script>
-    <script src="js/ui.js"></script>
+    <script type="module" src="./src/main.jsx"></script>
 </body>
 </html> 

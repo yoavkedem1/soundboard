@@ -2,5 +2,5 @@ This is a placeholder. You should replace this with actual icon files:
 
 1. icon-192x192.png (192x192 pixels)
 2. icon-512x512.png (512x512 pixels)
-
+ 
 You can create these icons using image editing software or online icon generators. 
