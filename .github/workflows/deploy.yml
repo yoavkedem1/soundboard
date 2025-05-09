@@ -26,10 +26,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        
+      - name: Debug Info
+        run: |
+          echo "GitHub Actions Runner OS: ${{ runner.os }}"
+          echo "GitHub Actions Runner Arch: ${{ runner.arch }}"
+          echo "GitHub Repository: ${{ github.repository }}"
+          echo "GitHub Ref: ${{ github.ref }}"
+          echo "Node Version: $(node -v)"
+          echo "NPM Version: $(npm -v)"
         
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: 'npm'
@@ -40,14 +49,17 @@ jobs:
       - name: Build
         run: npm run build
       
+      - name: List build output
+        run: ls -la dist/
+      
       - name: Setup Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v4
         
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v3
         with:
           path: 'dist'
           
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2 
+        uses: actions/deploy-pages@v4 
