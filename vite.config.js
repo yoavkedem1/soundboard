@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
 
 // Get the GitHub repo name for GitHub Pages deployment
 const getBase = () => {
@@ -7,11 +8,14 @@ const getBase = () => {
   if (process.env.BASE_PATH) {
     return process.env.BASE_PATH;
   }
-  
-  // For GitHub Pages: use repo name as base (or './' as fallback)
-  return process.env.GITHUB_REPOSITORY 
-    ? `/${process.env.GITHUB_REPOSITORY.split('/')[1]}/` 
-    : './';
+
+  // For GitHub Pages deployment through GitHub Actions
+  if (process.env.GITHUB_REPOSITORY) {
+    return `/${process.env.GITHUB_REPOSITORY.split('/')[1]}/`;
+  }
+
+  // For local development
+  return '/';
 };
 
 export default defineConfig({
@@ -20,5 +24,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html')
+      }
+    },
+    // Force Vite to copy assets with the original paths
+    assetsInlineLimit: 0
   },
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src')
+    }
+  }
 }); 

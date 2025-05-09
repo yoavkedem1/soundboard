@@ -6,33 +6,30 @@
     <title>Fantasy Soundboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" />
-    <link rel="manifest" href="./manifest.json">
+    <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#8b5a2b">
     <meta name="description" content="A customizable fantasy soundboard for games and performances">
-    <link rel="shortcut icon" href="./icons/icon-placeholder.svg" type="image/svg+xml">
-    <!-- GitHub Pages redirect handling -->
+    <link rel="shortcut icon" href="icons/icon-placeholder.svg" type="image/svg+xml">
+    <!-- Single Page App routing for GitHub Pages -->
     <script>
-        // Check if we were redirected from a 404 page
-        (function() {
-            var redirect = sessionStorage.getItem('redirect');
-            if (redirect) {
-                sessionStorage.removeItem('redirect');
-                var cleanPath = redirect;
-                if (cleanPath && cleanPath !== '/' && cleanPath !== '/index.html') {
-                    // Get the base URL
-                    var basePath = window.location.pathname;
-                    if (basePath.endsWith('/')) {
-                        basePath = basePath.slice(0, -1);
-                    }
-                    if (basePath.endsWith('/index.html')) {
-                        basePath = basePath.slice(0, -11);
-                    }
-                    
-                    // Use history API to restore the proper URL
-                    history.replaceState(null, null, basePath + cleanPath);
-                }
-            }
-        })();
+      // Handle route from 404.html redirect
+      (function() {
+        const search = window.location.search;
+        const params = new URLSearchParams(search);
+        const route = params.get('route');
+        
+        if (route) {
+          // Remove the ?route=... from the URL
+          const hashFragmentStart = window.location.href.indexOf('#');
+          window.history.replaceState(
+            null,
+            null,
+            hashFragmentStart > -1 
+              ? window.location.href.slice(0, hashFragmentStart) 
+              : window.location.href.slice(0, window.location.href.indexOf('?'))
+          );
+        }
+      })();
     </script>
     <style>
         /* Fallback styles when React doesn't load */
@@ -62,6 +59,7 @@
             border-radius: 4px;
             cursor: pointer;
             margin-top: 1rem;
+            margin-right: 0.5rem;
             font-weight: bold;
         }
         
@@ -79,7 +77,10 @@
         <h2 class="fallback-heading">Fantasy Soundboard</h2>
         <p>It seems the app is having trouble loading. This could be due to cached files.</p>
         <p>Try refreshing the page or clearing your browser cache.</p>
-        <button class="fallback-button" onclick="resetServiceWorker()">Reset App Data</button>
+        <div>
+            <button class="fallback-button" onclick="window.location.reload(true)">Refresh Page</button>
+            <button class="fallback-button" onclick="resetServiceWorker()">Reset App Data</button>
+        </div>
     </div>
 
     <!-- JavaScript to handle fallback display -->
@@ -115,6 +116,6 @@
         }
     </script>
 
-    <script type="module" src="./src/main.jsx"></script>
+    <script type="module" src="src/main.jsx"></script>
 </body>
 </html> 

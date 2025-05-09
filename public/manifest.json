@@ -6,11 +6,11 @@
   "background_color": "#f5f5f5",
   "display": "standalone",
   "orientation": "portrait",
-  "scope": "./",
-  "start_url": "./",
+  "scope": ".",
+  "start_url": "index.html",
   "icons": [
     {
-      "src": "./icons/icon-placeholder.svg",
+      "src": "icons/icon-placeholder.svg",
       "sizes": "192x192 512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"

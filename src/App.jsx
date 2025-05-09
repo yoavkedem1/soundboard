@@ -14,7 +14,10 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CategoryIcon from '@mui/icons-material/Category';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { saveSound, getAllSounds, deleteSound, saveGroup, getAllGroups, resetDatabase } from './db';
+import { saveSound, getAllSounds, deleteSound, saveGroup, getAllGroups, resetDatabase, initializeDatabase } from './db';
+
+// Import placeholder assets to enable proper bundling
+import placeholderIcon from '../public/icons/icon-placeholder.svg';
 
 // Create a fantasy-themed MUI theme
 const theme = createTheme({
@@ -126,10 +129,35 @@ export default function App() {
   const [newGroup, setNewGroup] = useState({ name: '' });
   const [error, setError] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [loadingOperations, setLoadingOperations] = useState({});
   
   // Refs
   const fileInputRef = useRef();
   const audioContextRef = useRef(null);
+  
+  // Function to cancel all loading operations
+  const cancelLoadingOperations = (exceptId = null) => {
+    Object.entries(loadingOperations).forEach(([id, cancel]) => {
+      if (id !== exceptId && typeof cancel === 'function') {
+        cancel();
+      }
+    });
+    
+    // Clear operations except the one we want to keep
+    if (exceptId) {
+      setLoadingOperations(prev => {
+        const newOps = { ...prev };
+        Object.keys(newOps).forEach(id => {
+          if (id !== exceptId) {
+            delete newOps[id];
+          }
+        });
+        return newOps;
+      });
+    } else {
+      setLoadingOperations({});
+    }
+  };
   
   // Get audio context
   const getAudioContext = useCallback(() => {
@@ -139,6 +167,21 @@ export default function App() {
       audioContextRef.current = new AudioContext();
     }
     return audioContextRef.current;
+  }, []);
+  
+  // Initialize database on mount
+  useEffect(() => {
+    const init = async () => {
+      try {
+        // Initialize database (will handle legacy database cleanup)
+        await initializeDatabase();
+      } catch (err) {
+        console.error('Database initialization error:', err);
+        setError('Database initialization failed. Try resetting the app data.');
+      }
+    };
+    
+    init();
   }, []);
   
   // Get all categories (predefined + custom)
@@ -216,7 +259,7 @@ export default function App() {
     };
   }, []);
   
-  // Handle play/pause with more robust event handling
+  // Handle play/pause with more robust error handling and sound switching
   const handlePlayPause = async (sound) => {
     const id = sound.id;
     
@@ -240,125 +283,168 @@ export default function App() {
         return;
       }
       
+      // Cancel any ongoing loading operations
+      cancelLoadingOperations(id);
+      
       // Ensure audio context is running
       const audioContext = getAudioContext();
       if (audioContext.state === 'suspended') {
         await audioContext.resume();
       }
       
-      // Otherwise play this sound (while keeping other sounds playing)
-      let audio = audioMap[id];
-      
-      // Create new audio element if none exists
-      if (!audio) {
-        audio = new Audio();
-        
-        // Make sure to set event handlers before loading audio
-        audio.loop = !!looping[id];
-        
-        // Handle audio ending
-        audio.addEventListener('ended', function onEnded() {
-          if (!this.loop) {
-            setPlaying(prev => {
-              const newState = { ...prev };
-              delete newState[id];
-              return newState;
-            });
+      // IMPORTANT: Clean up any existing audio elements before creating new ones
+      // This fixes the issue when switching between sounds rapidly
+      Object.entries(playing).forEach(([playingId, isPlaying]) => {
+        if (isPlaying && playingId !== id) {
+          const existingAudio = audioMap[playingId];
+          if (existingAudio) {
+            existingAudio.pause();
+            existingAudio.currentTime = 0;
           }
-        });
-        
-        // Handle errors
-        audio.addEventListener('error', function onError(err) {
-          console.error("Audio playback error:", err);
+        }
+      });
+      
+      // Reset playing state to prevent multiple sounds from being marked as playing
+      // but not actually playing due to errors
+      setPlaying({});
+      
+      // Create a new audio element for reliability when switching sounds
+      const audio = new Audio();
+      
+      // Make sure to set event handlers before loading audio
+      audio.loop = !!looping[id];
+      
+      // Handle audio ending
+      audio.addEventListener('ended', function onEnded() {
+        if (!this.loop) {
           setPlaying(prev => {
             const newState = { ...prev };
             delete newState[id];
             return newState;
           });
-          setError("Could not play sound. Try using a different browser or format.");
+        }
+      });
+      
+      // Handle errors
+      audio.addEventListener('error', function onError(err) {
+        console.error("Audio playback error:", err);
+        setPlaying(prev => {
+          const newState = { ...prev };
+          delete newState[id];
+          return newState;
         });
-        
-        // Add time update event to track position
-        audio.addEventListener('timeupdate', function onTimeUpdate() {
-          setAudioPositions(prev => ({
-            ...prev,
-            [id]: {
-              current: this.currentTime,
-              duration: this.duration || sound.duration || 0
-            }
-          }));
-        });
-        
-        // Initialize with zeroed position to fix progress bar
+        setError("Could not play sound. Try using a different browser or format.");
+      });
+      
+      // Add time update event to track position
+      audio.addEventListener('timeupdate', function onTimeUpdate() {
         setAudioPositions(prev => ({
           ...prev,
           [id]: {
-            current: 0,
-            duration: sound.duration || 0
+            current: this.currentTime,
+            duration: this.duration || sound.duration || 0
+          }
+        }));
+      });
+      
+      // Initialize with zeroed position to fix progress bar
+      setAudioPositions(prev => ({
+        ...prev,
+        [id]: {
+          current: 0,
+          duration: sound.duration || 0
+        }
+      }));
+      
+      // Set up audio with proper loading sequence
+      audio.preload = "auto";
+      
+      // Set the source and wait for it to be ready
+      const sourcePromise = new Promise((resolve, reject) => {
+        // Create an AbortController for this operation
+        const abortController = new AbortController();
+        
+        // Store cancel function
+        setLoadingOperations(prev => ({
+          ...prev,
+          [id]: () => {
+            abortController.abort();
+            reject(new Error('Operation cancelled'));
           }
         }));
         
-        // Set up audio
-        audio.preload = "auto";
-        audio.src = sound.data;
+        // Set up event listeners for loading
+        audio.oncanplaythrough = resolve;
+        audio.onerror = reject;
         
-        // Store the audio element
-        setAudioMap(prev => ({ ...prev, [id]: audio }));
-      } else {
-        // If we have an existing audio but it's not playing,
-        // reset its current time if not looping
-        if (!looping[id]) {
-          audio.currentTime = 0;
-        }
+        // Set timeout for loading
+        const timeout = setTimeout(() => {
+          audio.oncanplaythrough = null;
+          audio.onerror = null;
+          reject(new Error("Audio loading timed out"));
+        }, 5000);
         
-        // Make sure loop state is current
-        audio.loop = !!looping[id];
-      }
-      
-      // Try to unlock audio on iOS/Safari
-      if (audio.paused) {
-        const silentPlay = audio.play();
-        if (silentPlay !== undefined) {
-          try {
-            await silentPlay;
-          } catch (e) {
-            // Probably user hasn't interacted yet
-            console.warn('Initial play was rejected:', e);
-            // We'll try again below
-          }
-        }
-      }
-      
-      // Ensure audio is fully loaded before playing
-      if (audio.readyState < 2) {  // HAVE_CURRENT_DATA (2) or higher needed for playback
-        await new Promise((resolve, reject) => {
-          const onCanPlay = () => {
-            audio.removeEventListener('canplaythrough', onCanPlay);
-            clearTimeout(timeout);
-            resolve();
-          };
-          
-          audio.addEventListener('canplaythrough', onCanPlay);
-          
-          // Set a timeout in case loading takes too long
-          const timeout = setTimeout(() => {
-            audio.removeEventListener('canplaythrough', onCanPlay);
-            reject(new Error("Audio loading timed out"));
-          }, 5000);
+        // Cleanup function
+        const cleanup = () => {
+          clearTimeout(timeout);
+          audio.oncanplaythrough = null;
+          audio.onerror = null;
+          setLoadingOperations(prev => {
+            const newOps = { ...prev };
+            delete newOps[id];
+            return newOps;
+          });
+        };
+        
+        // Replace success handler to clean up
+        audio.oncanplaythrough = () => {
+          cleanup();
+          resolve();
+        };
+        
+        // Replace error handler to clean up
+        audio.onerror = (err) => {
+          cleanup();
+          reject(err);
+        };
+        
+        // Handle abort
+        abortController.signal.addEventListener('abort', () => {
+          cleanup();
+          reject(new Error('Audio loading cancelled'));
         });
-      }
+        
+        // Set the source AFTER setting up all handlers
+        audio.src = sound.data;
+      });
       
-      // Play the audio without stopping other sounds
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        await playPromise;
-      }
+      // Store the new audio element
+      setAudioMap(prev => ({ ...prev, [id]: audio }));
       
-      // Only update playing state after successful play
+      // Wait for audio to be ready to play
+      await sourcePromise;
+      
+      // Play the audio
+      await audio.play();
+      
+      // Update playing state to indicate this sound is now playing
       setPlaying(prev => ({ ...prev, [id]: true }));
       
     } catch (err) {
+      // Handle the "Operation cancelled" error silently
+      if (err.message === 'Operation cancelled' || err.message === 'Audio loading cancelled') {
+        console.log(`Audio loading cancelled for sound: ${id}`);
+        return;
+      }
+      
       console.error("Error playing sound:", err);
+      // Clean up the audio element on error
+      const failedAudio = audioMap[id];
+      if (failedAudio) {
+        failedAudio.pause();
+        failedAudio.src = '';
+      }
+      
       setPlaying(prev => {
         const newState = { ...prev };
         delete newState[id];
@@ -432,19 +518,30 @@ export default function App() {
   
   // Stop all playing sounds
   const stopAllSounds = () => {
-    Object.keys(playing).forEach(id => {
-      if (playing[id]) {
-        const audio = audioMap[id];
-        if (audio) {
-          audio.pause();
-          audio.currentTime = 0; // Reset position
-        }
+    // Stop and clean up all audio elements
+    Object.entries(audioMap).forEach(([id, audio]) => {
+      if (audio) {
+        // Remove all event listeners
+        audio.onended = null;
+        audio.ontimeupdate = null;
+        audio.oncanplaythrough = null;
+        audio.onerror = null;
+        
+        // Stop playback
+        audio.pause();
+        audio.currentTime = 0;
+        
+        // Clear source
+        audio.src = '';
       }
     });
     
     // Reset all state
     setPlaying({});
     setAudioPositions({}); // Clear all positions
+    
+    // Create a new audio map to ensure clean state
+    setAudioMap({});
   };
   
   // Handle add sound dialog
@@ -548,19 +645,28 @@ export default function App() {
       stopAllSounds();
       
       // Reset database
-      await resetDatabase();
+      const success = await resetDatabase();
       
-      // Reset state
-      setSounds([]);
-      setGroups([]);
-      setAudioMap({});
-      setPlaying({});
-      setLooping({});
+      if (success) {
+        // Reset state
+        setSounds([]);
+        setGroups([]);
+        setAudioMap({});
+        setPlaying({});
+        setLooping({});
+        setAudioPositions({});
+        
+        // Show success message
+        setError("Database reset successfully. You can now add new sounds.");
+        setTimeout(() => setError(null), 3000);
+      } else {
+        setError("Failed to reset database. Try reloading the page.");
+      }
       
       setConfirmReset(false);
     } catch (err) {
       console.error("Error resetting database:", err);
-      setError("Failed to reset database");
+      setError(`Failed to reset database: ${err.message}. Try reloading the page.`);
     } finally {
       setLoading(false);
     }
@@ -587,12 +693,29 @@ export default function App() {
     return Math.min(Math.max(progress, 0), 100); // Ensure it's between 0-100
   };
   
+  // Prevent page resets by using try-catch for audio operations
+  useEffect(() => {
+    // Unregister any existing service workers to prevent page resets
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(
+        registrations => {
+          registrations.forEach(registration => {
+            registration.unregister();
+          });
+        }
+      ).catch(err => {
+        console.error('Service worker unregister failed:', err);
+      });
+    }
+  }, []);
+  
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box sx={{
         minHeight: '100vh',
-        background: 'url("https://images.unsplash.com/photo-1518562180175-34a163b1a9cf?ixlib=rb-1.2.1&auto=format&fit=crop&w=1950&q=80")',
+        // Use a solid color background instead of an image to avoid path issues
+        background: '#f2efe6',
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundAttachment: 'fixed',
@@ -612,7 +735,12 @@ export default function App() {
                   Fantasy Soundboard
                 </Typography>
                 <Box>
-                  <IconButton color="inherit" onClick={() => setConfirmReset(true)} title="Reset Soundboard">
+                  <IconButton 
+                    color="inherit" 
+                    onClick={() => setConfirmReset(true)} 
+                    title="Reset Soundboard"
+                    aria-label="Reset Soundboard"
+                  >
                     <RefreshIcon />
                   </IconButton>
                 </Box>

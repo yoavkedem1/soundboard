@@ -2,35 +2,30 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Redirecting...</title>
+  <title>Fantasy Soundboard</title>
   <script>
-    // GitHub Pages SPA redirect hack
-    // Handles 404s by redirecting to the index page with the URL path as a query param
-    // and then history.replaceState to get the correct URL after loading
-    
-    // Determine the base path from the URL: match against the GitHub Pages domain pattern
+    // Single Page Apps for GitHub Pages
+    // MIT License
+    // https://github.com/rafgraph/spa-github-pages
+    // This script takes the current url and converts the path and query
+    // string into just a query string, and then redirects the browser
+    // to the new url with only a query string and hash fragment
+
+    // Parse the url
+    var pathSegmentsToKeep = 1;
     var l = window.location;
-    var repositoryName = l.pathname.split('/')[1];
-    var basePath = '';
-    
-    // Handle GitHub Pages path structure
-    if (l.hostname.includes('github.io')) {
-      basePath = '/' + repositoryName;
-    }
-    
-    // Get the current path excluding the base path
-    var pathname = l.pathname;
-    if (basePath && pathname.startsWith(basePath)) {
-      pathname = pathname.slice(basePath.length);
-    }
-    
-    // Store the full URL minus the base path in sessionStorage
-    var cleanPath = pathname + l.search + l.hash;
-    sessionStorage.setItem('redirect', cleanPath);
-    
-    // Redirect to the root of the app
-    var redirectUrl = basePath + '/';
-    window.location.replace(redirectUrl);
+    var segments = l.pathname.split('/');
+    var route = segments.slice(pathSegmentsToKeep).join('/');
+
+    // Redirect to the index.html with the route as a query param
+    l.replace(
+      l.protocol + '//' + l.hostname + 
+      (l.port ? ':' + l.port : '') +
+      segments.slice(0, pathSegmentsToKeep).join('/') + '/' +
+      '?route=' + encodeURIComponent(route) +
+      (l.search ? '&' + l.search.slice(1) : '') +
+      l.hash
+    );
   </script>
 </head>
 <body>

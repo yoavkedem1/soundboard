@@ -18,28 +18,48 @@ const unregisterServiceWorker = async () => {
     for (const registration of registrations) {
       await registration.unregister();
     }
-    window.location.reload(true); // Force reload without cache
+    console.log('Service workers unregistered');
   }
 };
 
-// Register service worker with better error handling
+// Register service worker with better error handling for GitHub Pages
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    // Check if the page loaded correctly
+    // Only attempt to register if we've successfully rendered the app
     if (document.getElementById('root')?.children.length === 0) {
-      console.error('Page appears to be blank, attempting recovery...');
-      unregisterServiceWorker();
+      console.error('App failed to render, not registering service worker');
       return;
     }
     
-    // Use relative path to service worker
-    const swUrl = new URL('./service-worker.js', window.location.href).href;
+    // Get the base URL for proper service worker scope
+    const getBaseUrl = () => {
+      const baseElement = document.querySelector('base');
+      if (baseElement && baseElement.href) {
+        return new URL('.', baseElement.href).pathname;
+      }
+      
+      // Detect if we're in GitHub Pages
+      const isGitHubPages = window.location.hostname.includes('.github.io');
+      if (isGitHubPages) {
+        // Extract the repo name from the pathname
+        const pathParts = window.location.pathname.split('/');
+        if (pathParts.length > 1 && pathParts[1].length > 0) {
+          return `/${pathParts[1]}/`;
+        }
+      }
+      
+      return '/';
+    };
     
+    // Use the correct path for the service worker
+    const swUrl = new URL('service-worker.js', window.location.href).href;
+    
+    // Register the service worker
     navigator.serviceWorker.register(swUrl)
       .then(registration => {
         console.log('ServiceWorker registered with scope:', registration.scope);
         
-        // Update service worker if needed
+        // Handle updates
         registration.onupdatefound = () => {
           const installingWorker = registration.installing;
           if (installingWorker === null) return;
@@ -47,24 +67,33 @@ if ('serviceWorker' in navigator) {
           installingWorker.onstatechange = () => {
             if (installingWorker.state === 'installed') {
               if (navigator.serviceWorker.controller) {
-                console.log('New content is available; please refresh.');
+                console.log('New service worker installed, content updated');
               } else {
-                console.log('Content is cached for offline use.');
+                console.log('Service worker installed, content cached for offline use');
               }
             }
           };
         };
       })
       .catch(error => {
-        console.error('ServiceWorker registration failed:', error);
-        // If service worker fails, try to recover
-        unregisterServiceWorker();
+        console.error('Service worker registration failed:', error);
       });
-      
-    // Handle service worker communication errors
+    
+    // Listen for messages from the service worker
     navigator.serviceWorker.addEventListener('message', event => {
-      if (event.data && event.data.type === 'ERROR') {
-        console.error('Service worker error:', event.data.message);
+      if (event.data?.type === 'SW_UPDATED') {
+        console.log('Service worker was updated');
+      }
+    });
+    
+    // Handle errors that might occur after registration
+    window.addEventListener('error', (event) => {
+      // If we see frequent errors after service worker registration,
+      // it might be causing issues
+      if (navigator.serviceWorker.controller && 
+          event.message && 
+          (event.message.includes('fetch') || event.message.includes('DOM'))) {
+        console.warn('Errors detected, considering service worker reset');
       }
     });
   });

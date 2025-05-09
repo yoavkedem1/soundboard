@@ -1,7 +1,34 @@
-import { openDB } from 'idb';
+import { openDB, deleteDB } from 'idb';
+
+// Delete the old database if it exists
+const deleteLegacyDB = async () => {
+  try {
+    // Check for the presence of the old idb-keyval store
+    const oldDB = await window.indexedDB.open('soundboard-db');
+    oldDB.onupgradeneeded = () => {
+      oldDB.transaction.abort();
+      oldDB.result?.close();
+    };
+    
+    // Close and attempt to delete
+    oldDB.onsuccess = async () => {
+      oldDB.result.close();
+      try {
+        await deleteDB('soundboard-db');
+        console.log('Legacy database deleted successfully');
+        // Reload to ensure clean state
+        window.location.reload();
+      } catch (err) {
+        console.error('Failed to delete legacy database:', err);
+      }
+    };
+  } catch (err) {
+    console.error('Error checking for legacy database:', err);
+  }
+};
 
 // Create and initialize database
-const dbPromise = openDB('soundboard-db', 1, {
+const dbPromise = openDB('soundboard-db-new', 1, {
   upgrade(db) {
     // Create object stores with proper keyPath
     if (!db.objectStoreNames.contains('sounds')) {
@@ -18,7 +45,7 @@ const dbPromise = openDB('soundboard-db', 1, {
 // Sound operations
 export async function saveSound(sound) {
   if (!sound.id) {
-    sound.id = Date.now().toString();
+    sound.id = `sound_${Date.now()}`;
   }
   
   const db = await dbPromise;
@@ -54,7 +81,7 @@ export async function clearAllSounds() {
 // Group operations
 export async function saveGroup(group) {
   if (!group.id) {
-    group.id = Date.now().toString();
+    group.id = `group_${Date.now()}`;
   }
   
   const db = await dbPromise;
@@ -97,8 +124,25 @@ export async function getSoundsByGroup(groupId) {
 
 // Reset entire database
 export async function resetDatabase() {
-  const db = await dbPromise;
-  await db.clear('sounds');
-  await db.clear('groups');
-  return true;
+  try {
+    await deleteDB('soundboard-db'); // Try to delete old DB format
+    const db = await dbPromise;
+    await db.clear('sounds');
+    await db.clear('groups');
+    return true;
+  } catch (error) {
+    console.error("Error resetting database:", error);
+    return false;
+  }
+}
+
+// Check and clear old database on first load
+export async function initializeDatabase() {
+  try {
+    await deleteLegacyDB();
+    return true;
+  } catch (err) {
+    console.error('Database initialization error:', err);
+    return false;
+  }
 } 
