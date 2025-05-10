@@ -6,7 +6,8 @@ import {
   TextField, CircularProgress, MenuItem, Select, InputLabel,
   FormControl, Alert, Snackbar, LinearProgress, ToggleButton,
   Slider, Badge, Tooltip, ClickAwayListener, Drawer, Chip, Divider,
-  List, ListItem, ListItemText, ListItemIcon, ListItemSecondaryAction
+  List, ListItem, ListItemText, ListItemIcon, ListItemSecondaryAction,
+  TabScrollButton
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import LoopIcon from '@mui/icons-material/Loop';
@@ -179,6 +180,7 @@ export default function App() {
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState({});
+  const [paused, setPaused] = useState({}); // Track paused sounds separately
   const [looping, setLooping] = useState({});
   const [audioMap, setAudioMap] = useState({});
   const [audioPositions, setAudioPositions] = useState({});
@@ -410,9 +412,6 @@ export default function App() {
   // Handle category change
   const handleCategoryChange = (event, newValue) => {
     setCurrentTab(newValue);
-    
-    // Stop all playing sounds
-    stopAllSounds();
   };
   
   // Get filtered sounds for the current category
@@ -442,7 +441,7 @@ export default function App() {
         return;
       }
       
-      // If already playing, stop it
+      // If already playing, pause it (but don't remove from mixer)
       if (playing[sound.id]) {
         // Get the audio element
         const audioElement = audioMap[sound.id];
@@ -451,11 +450,26 @@ export default function App() {
             // Pause the audio
             audioElement.pause();
             
-            // Update playing state
+            // Update state: mark as paused but still in the mixer
             setPlaying(prev => ({ ...prev, [sound.id]: false }));
+            setPaused(prev => ({ ...prev, [sound.id]: true }));
           } catch (err) {
-            console.error('Error stopping audio:', err);
+            console.error('Error pausing audio:', err);
           }
+        }
+        return;
+      }
+      
+      // If was paused, resume it
+      if (paused[sound.id] && audioMap[sound.id]) {
+        const audio = audioMap[sound.id];
+        try {
+          await audio.play();
+          setPlaying(prev => ({ ...prev, [sound.id]: true }));
+          setPaused(prev => ({ ...prev, [sound.id]: false }));
+        } catch (err) {
+          console.error('Error resuming audio:', err);
+          setError(`Error resuming "${sound.name}": ${err.message}`);
         }
         return;
       }
@@ -530,6 +544,7 @@ export default function App() {
               
               // Update state
               setPlaying(prev => ({ ...prev, [sound.id]: true }));
+              setPaused(prev => ({ ...prev, [sound.id]: false })); // Clear paused state
               
               // Remove event listeners after successful play
               document.removeEventListener('click', unlockAudio);
@@ -556,6 +571,11 @@ export default function App() {
       // Only update state if play was successful
       if (playSuccess) {
         setPlaying(prev => ({ ...prev, [sound.id]: true }));
+        setPaused(prev => {
+          const newState = { ...prev };
+          delete newState[sound.id]; // Remove from paused state
+          return newState;
+        });
       }
       
       // Update audio map
@@ -570,6 +590,32 @@ export default function App() {
     } catch (err) {
       console.error('Error in handlePlayPause:', err);
       setError(`Playback error: ${err.message}`);
+    }
+  };
+  
+  // Completely stop a sound (remove it from the mixer)
+  const handleStopSound = (sound) => {
+    try {
+      const audio = audioMap[sound.id];
+      if (audio) {
+        // Stop playback
+        audio.pause();
+        audio.currentTime = 0;
+        
+        // Update state to remove from mixer completely
+        setPlaying(prev => {
+          const newState = { ...prev };
+          delete newState[sound.id];
+          return newState;
+        });
+        setPaused(prev => {
+          const newState = { ...prev };
+          delete newState[sound.id];
+          return newState;
+        });
+      }
+    } catch (err) {
+      console.error(`Error stopping sound ${sound.name}:`, err);
     }
   };
   
@@ -639,13 +685,12 @@ export default function App() {
   // Stop all playing sounds
   const stopAllSounds = () => {
     try {
-      // Get a list of all currently playing sound IDs
-      const playingSoundIds = Object.entries(playing)
-        .filter(([_, isPlaying]) => isPlaying)
-        .map(([id]) => id);
+      // Get a list of all sounds in the mixer (playing or paused)
+      const allSoundIds = [...Object.keys(playing), ...Object.keys(paused)];
+      const uniqueSoundIds = [...new Set(allSoundIds)];
       
       // Stop each sound individually
-      playingSoundIds.forEach(id => {
+      uniqueSoundIds.forEach(id => {
         const audio = audioMap[id];
         if (audio) {
           // Remove event listeners
@@ -667,11 +712,12 @@ export default function App() {
         }
       });
       
-      // Update state
+      // Clear all states
       setPlaying({});
+      setPaused({});
       setAudioPositions({});
       
-      console.log(`Stopped ${playingSoundIds.length} sounds`);
+      console.log(`Stopped ${uniqueSoundIds.length} sounds`);
     } catch (err) {
       console.error('Error stopping all sounds:', err);
       setError('Failed to stop all sounds');
@@ -874,7 +920,7 @@ export default function App() {
     });
   };
   
-  // Handle volume change
+  // Handle volume change with improved muting
   const handleVolumeChange = (sound, newValue) => {
     const id = sound.id;
     
@@ -890,7 +936,16 @@ export default function App() {
     // Update audio if playing
     const audio = audioMap[id];
     if (audio) {
-      audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+      // Force true muting for very low volumes (0-1%)
+      if (effectiveVolume <= 0.01) {
+        console.log(`Setting ${sound.name} to truly muted`);
+        audio.muted = true;
+        audio.volume = 0;
+      } else {
+        audio.muted = false;
+        audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+        console.log(`Setting ${sound.name} volume to ${audio.volume} (effective: ${effectiveVolume})`);
+      }
     }
     
     // Save volume preference for next play
@@ -1276,12 +1331,34 @@ export default function App() {
     // Apply master volume to all currently playing audio elements
     Object.entries(audioMap).forEach(([id, audio]) => {
       if (audio) {
-        // Calculate effective volume (soundVolume * masterVolume)
-        const soundVolume = sounds.find(s => s.id === id)?.volume || 0.7;
-        const effectiveVolume = soundVolume * masterVolume;
-        
-        // Apply clamped volume to audio
-        audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+        try {
+          // Calculate effective volume (soundVolume * masterVolume)
+          const sound = sounds.find(s => s.id === id);
+          if (sound) {
+            const soundVolume = sound.volume || 0.7;
+            const effectiveVolume = soundVolume * masterVolume;
+            
+            console.log(`Master volume changed: Applying to ${sound.name}, base vol=${soundVolume}, master=${masterVolume}, effective=${effectiveVolume}`);
+            
+            // Force true muting when master volume is near zero
+            if (masterVolume <= 0.01) {
+              console.log(`Setting master mute on ${sound.name}`);
+              audio.muted = true;
+              audio.volume = 0;
+            } 
+            // Or when the effective volume is near zero
+            else if (effectiveVolume <= 0.01) {
+              console.log(`Setting effective mute on ${sound.name}`);
+              audio.muted = true;
+              audio.volume = 0;
+            } else {
+              audio.muted = false;
+              audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+            }
+          }
+        } catch (err) {
+          console.warn(`Error adjusting volume for sound ${id}:`, err);
+        }
       }
     });
   }, [masterVolume, audioMap, sounds]);
@@ -1382,9 +1459,33 @@ export default function App() {
                   onChange={handleCategoryChange}
                   variant="scrollable"
                   scrollButtons="auto"
+                  allowScrollButtonsMobile
                   aria-label="Category tabs"
+                  ScrollButtonComponent={(props) => {
+                    // Only render scroll buttons when really needed
+                    // This prevents the constant appearance/disappearance causing jumps
+                    if (props.direction === 'left' && currentTab === 0) return null;
+                    if (props.direction === 'right' && currentTab === allCategories.length - 1) return null;
+                    return <TabScrollButton {...props} />;
+                  }}
                   sx={{
                     mb: 1,
+                    // Add stop-hover effect to prevent jumpy behavior
+                    '.MuiTabs-scrollButtons': {
+                      '&.Mui-disabled': { opacity: 0.3 },
+                      // Increase clickable area
+                      width: 40,
+                      // Add buffer zone to prevent flickering on edge hover
+                      '&::before': {
+                        content: '""',
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        width: '20px',
+                        zIndex: 1,
+                      },
+                      '&.MuiTabScrollButton-root': { transition: 'opacity 0.3s ease' },
+                    },
                     '& .MuiTab-root': {
                       bgcolor: 'secondary.main',
                       opacity: 0.7,
@@ -1402,12 +1503,6 @@ export default function App() {
                         opacity: 1,
                         transform: 'translateY(-2px)',
                         boxShadow: '0 4px 8px rgba(0,0,0,0.15)',
-                      },
-                    },
-                    '& .MuiTabs-scrollButtons': {
-                      color: 'white',
-                      '&.Mui-disabled': {
-                        opacity: 0.3,
                       },
                     },
                   }}
@@ -1613,17 +1708,17 @@ export default function App() {
                 <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
                   <IconButton 
                     onClick={() => {
+                      console.log("Setting master volume to 0 (mute all)");
                       const newVolume = 0;
                       setMasterVolume(newVolume);
                       
                       // Apply to all currently playing sounds immediately
                       Object.entries(audioMap).forEach(([id, audio]) => {
                         if (audio) {
-                          const sound = sounds.find(s => s.id === id);
-                          if (sound) {
-                            const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
-                            audio.volume = 0; // Set to zero
-                          }
+                          // Force muting
+                          console.log(`Muting sound ${id}`);
+                          audio.volume = 0;
+                          audio.muted = true;
                         }
                       });
                     }}
@@ -1637,6 +1732,7 @@ export default function App() {
                     onChange={(e, newValue) => {
                       // Convert percentage to decimal
                       const newVolume = newValue / 100;
+                      console.log(`Master volume changed to ${newVolume * 100}%`);
                       
                       // Update state
                       setMasterVolume(newVolume);
@@ -1647,7 +1743,18 @@ export default function App() {
                           const sound = sounds.find(s => s.id === id);
                           if (sound) {
                             const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
-                            audio.volume = Math.max(0, Math.min(1, baseVolume * newVolume));
+                            const effectiveVolume = baseVolume * newVolume;
+                            
+                            // Ensure proper muting
+                            if (newVolume <= 0.01 || effectiveVolume <= 0.01) {
+                              console.log(`Muting sound ${sound.name}`);
+                              audio.volume = 0;
+                              audio.muted = true;
+                            } else {
+                              console.log(`Setting ${sound.name} volume to ${effectiveVolume}`);
+                              audio.muted = false;
+                              audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+                            }
                           }
                         }
                       });
@@ -1669,6 +1776,7 @@ export default function App() {
                           const sound = sounds.find(s => s.id === id);
                           if (sound) {
                             const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
+                            audio.muted = false;
                             audio.volume = baseVolume; // Set to base volume (1.0 master means use base volume)
                           }
                         }
@@ -1692,7 +1800,7 @@ export default function App() {
                 Currently Playing
               </Typography>
               
-              {Object.entries(playing).filter(([id, isPlaying]) => isPlaying).length === 0 ? (
+              {Object.keys({ ...playing, ...paused }).length === 0 ? (
                 <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'rgba(255,255,255,0.5)' }}>
                   <Typography variant="body2" color="text.secondary">
                     No sounds playing
@@ -1705,86 +1813,105 @@ export default function App() {
                   maxHeight: '50vh',
                   overflow: 'auto'
                 }}>
-                  {Object.entries(playing)
-                    .filter(([id, isPlaying]) => isPlaying)
-                    .map(([id]) => {
-                      const sound = sounds.find(s => s.id === id);
-                      if (!sound) return null;
-                      
-                      const audio = audioMap[id];
-                      const position = audioPositions[id] || 0;
-                      const duration = sound.duration || 0;
-                      const soundVolume = sound.volume !== undefined ? sound.volume : 0.7;
-                      
-                      return (
-                        <ListItem key={id} sx={{ 
-                          borderBottom: '1px solid rgba(0,0,0,0.05)',
-                          px: 2,
-                          py: 1,
-                        }}>
-                          <Box sx={{ width: '100%' }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
-                              <span style={{ marginRight: 8 }}>{sound.emoji || '🔊'}</span>
-                              <Typography variant="body2" noWrap sx={{ flexGrow: 1, fontWeight: 'bold' }}>
-                                {sound.name}
-                              </Typography>
-                              <IconButton 
-                                size="small" 
-                                color="error"
-                                onClick={() => handlePlayPause(sound)}
-                              >
-                                <StopIcon fontSize="small" />
-                              </IconButton>
-                            </Box>
+                  {Object.keys({ ...playing, ...paused }).map(id => {
+                    const sound = sounds.find(s => s.id === id);
+                    if (!sound) return null;
+                    
+                    const audio = audioMap[id];
+                    const position = audioPositions[id] || 0;
+                    const duration = sound.duration || 0;
+                    const soundVolume = sound.volume !== undefined ? sound.volume : 0.7;
+                    const isPlaying = playing[id];
+                    const isPaused = paused[id];
+                    
+                    return (
+                      <ListItem key={id} sx={{ 
+                        borderBottom: '1px solid rgba(0,0,0,0.05)',
+                        px: 2,
+                        py: 1,
+                        opacity: isPaused ? 0.7 : 1, // Dim paused sounds
+                      }}>
+                        <Box sx={{ width: '100%' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                            <span style={{ marginRight: 8 }}>{sound.emoji || '🔊'}</span>
+                            <Typography variant="body2" noWrap sx={{ 
+                              flexGrow: 1, 
+                              fontWeight: 'bold',
+                              fontStyle: isPaused ? 'italic' : 'normal', // Italicize paused sounds
+                            }}>
+                              {sound.name}
+                              {isPaused && <span style={{ marginLeft: '4px', fontSize: '80%', color: '#777' }}>(Paused)</span>}
+                            </Typography>
                             
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Box sx={{ width: '100%' }}>
-                                <Slider
-                                  size="small"
-                                  value={soundVolume * 100}
-                                  onChange={(e, newValue) => {
-                                    const newVol = newValue / 100;
-                                    handleVolumeChange(sound, newVol);
-                                  }}
-                                  aria-label={`${sound.name} volume`}
-                                  sx={{ 
-                                    color: sound.color || theme.palette.primary.main 
-                                  }}
-                                />
-                                <Box sx={{ 
-                                  display: 'flex', 
-                                  justifyContent: 'space-between',
-                                  fontSize: '0.75rem',
-                                  color: 'text.secondary'
-                                }}>
-                                  <span>{Math.round(soundVolume * 100)}%</span>
-                                  {duration > 0 && (
-                                    <span>{formatTime(position)} / {formatTime(duration)}</span>
-                                  )}
-                                </Box>
-                              </Box>
-                            </Box>
+                            {/* Play/Pause Button */}
+                            <IconButton 
+                              size="small" 
+                              color="primary"
+                              onClick={() => handlePlayPause(sound)}
+                              sx={{ mr: 1 }}
+                            >
+                              {isPlaying ? <PauseIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+                            </IconButton>
                             
-                            {/* Progress bar */}
-                            {duration > 0 && (
-                              <LinearProgress 
-                                variant="determinate" 
-                                value={(position / duration) * 100} 
+                            {/* Stop Button */}
+                            <IconButton 
+                              size="small" 
+                              color="error"
+                              onClick={() => handleStopSound(sound)}
+                            >
+                              <StopIcon fontSize="small" />
+                            </IconButton>
+                          </Box>
+                          
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Box sx={{ width: '100%' }}>
+                              <Slider
+                                size="small"
+                                value={soundVolume * 100}
+                                onChange={(e, newValue) => {
+                                  const newVol = newValue / 100;
+                                  handleVolumeChange(sound, newVol);
+                                }}
+                                aria-label={`${sound.name} volume`}
                                 sx={{ 
-                                  height: 3, 
-                                  mt: 0.5, 
-                                  borderRadius: 5,
-                                  bgcolor: 'rgba(0,0,0,0.05)',
-                                  '& .MuiLinearProgress-bar': {
-                                    bgcolor: sound.color || theme.palette.primary.main,
-                                  }
+                                  color: sound.color || theme.palette.primary.main 
                                 }}
                               />
-                            )}
+                              <Box sx={{ 
+                                display: 'flex', 
+                                justifyContent: 'space-between',
+                                fontSize: '0.75rem',
+                                color: 'text.secondary'
+                              }}>
+                                <span>{Math.round(soundVolume * 100)}%</span>
+                                {duration > 0 && (
+                                  <span>{formatTime(position)} / {formatTime(duration)}</span>
+                                )}
+                              </Box>
+                            </Box>
                           </Box>
-                        </ListItem>
-                      );
-                    })}
+                          
+                          {/* Progress bar */}
+                          {duration > 0 && (
+                            <LinearProgress 
+                              variant="determinate" 
+                              value={(position / duration) * 100} 
+                              sx={{ 
+                                height: 3, 
+                                mt: 0.5, 
+                                borderRadius: 5,
+                                bgcolor: 'rgba(0,0,0,0.05)',
+                                '& .MuiLinearProgress-bar': {
+                                  bgcolor: sound.color || theme.palette.primary.main,
+                                },
+                                opacity: isPaused ? 0.5 : 1, // Dim progress for paused sounds
+                              }}
+                            />
+                          )}
+                        </Box>
+                      </ListItem>
+                    );
+                  })}
                 </List>
               )}
               
