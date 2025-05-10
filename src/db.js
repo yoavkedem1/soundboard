@@ -1,428 +1,340 @@
 import { openDB, deleteDB } from 'idb';
 
-// Only use version 2, remove all version 1 handling
+// Database configuration
+const DB_NAME = 'soundboard-db';
 const DB_VERSION = 2;
 
-// Check if we've detected database version issues
-let hasDetectedVersionMismatch = false;
+// Track database state
+let dbInstance = null;
+let dbInitialized = false;
+let dbInitializing = false;
+let dbInitPromise = null;
 
-// Delete ALL databases to ensure a clean start
-const cleanDatabases = async () => {
-  try {
-    console.log('Cleaning all database versions...');
-    
-    // Delete both old and new databases to ensure clean state
-    await deleteDB('soundboard-db');
-    await deleteDB('soundboard-db-new');
-    
-    console.log('All databases deleted successfully');
-    return true;
-  } catch (err) {
-    console.error('Error deleting databases:', err);
-    return false;
-  }
-};
-
-// Clear caches and unregister service workers
-const clearCaches = async () => {
-  // Unregister service workers
-  if ('serviceWorker' in navigator) {
-    try {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      for (const registration of registrations) {
-        await registration.unregister();
-      }
-      console.log('Service workers unregistered');
-    } catch (err) {
-      console.error('Error unregistering service workers:', err);
-    }
+/**
+ * Database schema definition
+ */
+const createSchema = (db, oldVersion, newVersion) => {
+  console.log(`Creating/upgrading database from version ${oldVersion} to ${newVersion}`);
+  
+  // Create sounds store if it doesn't exist
+  if (!db.objectStoreNames.contains('sounds')) {
+    const soundsStore = db.createObjectStore('sounds', { keyPath: 'id' });
+    soundsStore.createIndex('groupId', 'groupId');
+    console.log('Created sounds store');
   }
   
-  // Clear caches
-  if (window.caches) {
-    try {
-      const cacheKeys = await window.caches.keys();
-      await Promise.all(cacheKeys.map(key => window.caches.delete(key)));
-      console.log('Caches cleared');
-    } catch (err) {
-      console.error('Error clearing caches:', err);
-    }
+  // Create groups store if it doesn't exist
+  if (!db.objectStoreNames.contains('groups')) {
+    db.createObjectStore('groups', { keyPath: 'id' });
+    console.log('Created groups store');
   }
+  
+  console.log(`Database schema updated to version ${newVersion}`);
 };
 
-// Try to open the database first just to check its existing version
-const detectDatabaseVersion = async () => {
+/**
+ * Clean up stale databases
+ */
+const cleanupDatabases = async () => {
   try {
-    // Try to open without specifying version to get existing version
-    const tempDb = await openDB('soundboard-db-new');
-    const actualVersion = tempDb.version;
-    console.log(`Detected database version: ${actualVersion}`);
-    
-    // Close the database
-    tempDb.close();
-    
-    // If the versions don't match, handle this situation
-    if (actualVersion !== DB_VERSION) {
-      console.warn(`Version mismatch: Code expects v${DB_VERSION}, database is v${actualVersion}`);
-      hasDetectedVersionMismatch = true;
-      
-      // Any version mismatch requires a clean slate
-      console.log("Database version mismatch detected, clearing cache and databases...");
-      
-      // Clean everything and reload
-      await cleanDatabases();
-      await clearCaches();
-      
-      // If we're not already in a clean reload, force one
-      if (!window.location.search.includes('forceclean=1')) {
-        window.location.href = window.location.pathname + '?forceclean=1';
-        return false;
-      }
-    }
-    
+    await deleteDB(DB_NAME);
+    await deleteDB('soundboard-db-new'); // Delete any old database versions
+    console.log('Old databases cleaned up');
     return true;
   } catch (err) {
-    // If database doesn't exist, that's fine - we'll create it
-    if (err.name === 'NotFoundError') {
-      console.log('Database does not exist yet, will be created');
-      return true;
-    }
-    
-    console.error('Error detecting database version:', err);
+    console.error('Failed to cleanup databases:', err);
     return false;
   }
 };
 
-// Check database version at startup
-detectDatabaseVersion().catch(err => {
-  console.error('Error during version detection:', err);
-});
-
-// Create and initialize database - always start at version 2
-const dbPromise = openDB('soundboard-db-new', DB_VERSION, {
-  upgrade(db, oldVersion, newVersion) {
-    console.log(`Creating/upgrading database from version ${oldVersion} to ${newVersion}`);
-    
-    // Always create full schema as version 2
-    // We no longer have version 1 logic
-    
-    // Create object stores with proper keyPath if they don't exist
-    if (!db.objectStoreNames.contains('sounds')) {
-      const soundStore = db.createObjectStore('sounds', { keyPath: 'id' });
-      soundStore.createIndex('groupId', 'groupId');
-    }
-    
-    if (!db.objectStoreNames.contains('groups')) {
-      db.createObjectStore('groups', { keyPath: 'id' });
-    }
-    
-    console.log('Database schema created at version 2');
-  },
-  blocked() {
-    console.warn('Database upgrade was blocked. Please close other tabs with this app.');
-  },
-  blocking() {
-    console.warn('This tab is blocking a database upgrade. Please close this tab.');
-  },
-  terminated() {
-    console.error('Database connection was terminated unexpectedly.');
+/**
+ * Initialize the database system
+ */
+export const initializeDatabase = async () => {
+  // Return existing promise if already initializing
+  if (dbInitializing && dbInitPromise) {
+    return dbInitPromise;
   }
-});
-
-// Function to add volume property to existing sounds
-// This is called after the database is upgraded
-async function addVolumePropertyToSounds() {
-  try {
-    const db = await getDatabase();
-    if (!db) return; // Exit if database is not available
+  
+  // Return early if already initialized
+  if (dbInitialized && dbInstance) {
+    return dbInstance;
+  }
+  
+  // Set initializing flag
+  dbInitializing = true;
+  
+  // Create initialization promise
+  dbInitPromise = (async () => {
+    console.log('Initializing database...');
     
+    try {
+      // Open database with specified schema
+      const db = await openDB(DB_NAME, DB_VERSION, {
+        upgrade: createSchema,
+        blocked() {
+          console.warn('Database upgrade blocked. Close other tabs with this app open.');
+        },
+        blocking() {
+          console.warn('This tab is blocking a database upgrade.');
+        },
+        terminated() {
+          console.error('Database connection terminated unexpectedly.');
+          dbInstance = null;
+          dbInitialized = false;
+        }
+      });
+      
+      // Add volume property to existing sounds if needed (migration)
+      await ensureVolumeProperty(db);
+      
+      // Store database instance
+      dbInstance = db;
+      dbInitialized = true;
+      console.log('Database initialized successfully');
+      
+      return db;
+    } catch (err) {
+      console.error('Database initialization failed:', err);
+      
+      // Only attempt cleanup if it's a version error
+      if (err.name === 'VersionError') {
+        console.log('Version mismatch detected, cleaning up...');
+        await cleanupDatabases();
+        
+        // Try one more time after cleanup
+        try {
+          const db = await openDB(DB_NAME, DB_VERSION, { upgrade: createSchema });
+          dbInstance = db;
+          dbInitialized = true;
+          console.log('Database initialized after cleanup');
+          return db;
+        } catch (retryErr) {
+          console.error('Failed to initialize database after cleanup:', retryErr);
+          throw retryErr;
+        }
+      } else {
+        throw err;
+      }
+    } finally {
+      dbInitializing = false;
+    }
+  })();
+  
+  return dbInitPromise;
+};
+
+/**
+ * Get existing database connection or open a new one
+ */
+async function getDb() {
+  if (dbInstance) return dbInstance;
+  return initializeDatabase();
+}
+
+/**
+ * Ensure all sounds have a volume property
+ */
+async function ensureVolumeProperty(db) {
+  try {
     const tx = db.transaction('sounds', 'readwrite');
     const store = tx.objectStore('sounds');
-    
-    // Get all sounds
     const sounds = await store.getAll();
     
-    // Add volume property to each sound
+    let updated = 0;
     for (const sound of sounds) {
       if (sound.volume === undefined) {
         sound.volume = 0.7; // Default volume
         await store.put(sound);
+        updated++;
       }
+    }
+    
+    if (updated > 0) {
+      console.log(`Added volume property to ${updated} sounds`);
     }
     
     await tx.done;
-    console.log('Volume property added to all sounds');
-    
+    return true;
   } catch (err) {
-    console.error('Error adding volume property:', err);
+    console.error('Failed to update sound volumes:', err);
+    return false;
   }
 }
 
-// Function to handle database version mismatch or connection issues
-const getDatabase = async () => {
+/**
+ * Reset the entire database
+ */
+export async function resetDatabase() {
   try {
-    return await dbPromise;
-  } catch (err) {
-    console.error('Database connection error:', err);
+    // Reset state
+    dbInstance = null;
+    dbInitialized = false;
+    dbInitializing = false;
+    dbInitPromise = null;
     
-    // Check if it's a version error
-    if (err.name === 'VersionError') {
-      console.warn('Database version mismatch detected. Cleaning up...');
-      
-      // If we've already detected a mismatch, don't try to fix it again
-      if (hasDetectedVersionMismatch) {
-        console.error('Already tried to fix version mismatch, but still failing.');
-        throw new Error('Unable to resolve database version mismatch');
-      }
-      
-      hasDetectedVersionMismatch = true;
-      
-      try {
-        // Close any existing connections
-        try {
-          const existingDB = await openDB('soundboard-db-new', null);
-          if (existingDB) {
-            existingDB.close();
-          }
-        } catch (e) {
-          // Ignore errors here
-        }
-        
-        // Delete databases and clear caches
-        await cleanDatabases();
-        await clearCaches();
-        
-        console.log('Database and caches cleared. Reloading...');
-        
-        // Force reload the page
-        window.location.reload(true);
-        return null;
-      } catch (cleanupErr) {
-        console.error('Error during cleanup:', cleanupErr);
-        throw new Error('Failed to recover from version mismatch. Please reload the page.');
-      }
+    // Delete database files
+    await cleanupDatabases();
+    
+    // Clear any service worker caches
+    if (window.caches) {
+      const keys = await window.caches.keys();
+      await Promise.all(keys.map(key => window.caches.delete(key)));
     }
     
-    throw err;
+    return true;
+  } catch (err) {
+    console.error('Reset failed:', err);
+    return false;
   }
-};
+}
 
-// Check database version and run migrations if needed
-dbPromise.then(db => {
-  // Always ensure all sounds have volume
-  addVolumePropertyToSounds();
-}).catch(err => {
-  console.error('Database initialization error:', err);
-});
-
-// Sound operations
+/**
+ * Sound operations
+ */
 export async function saveSound(sound) {
-  if (!sound.id) {
-    sound.id = `sound_${Date.now()}`;
-  }
-  
-  // Validate sound data
-  if (!sound.data) {
-    throw new Error('Missing sound data');
-  }
-  
-  // Ensure volume property exists
-  if (sound.volume === undefined) {
-    sound.volume = 0.7;
-  }
-  
   try {
-    const db = await getDatabase();
-    if (!db) return null;
+    if (!sound.id) {
+      sound.id = `sound_${Date.now()}`;
+    }
     
+    if (!sound.data) {
+      throw new Error('Missing sound data');
+    }
+    
+    // Ensure volume property exists
+    if (sound.volume === undefined) {
+      sound.volume = 0.7;
+    }
+    
+    const db = await getDb();
     await db.put('sounds', sound);
     return sound;
   } catch (err) {
-    console.error("Error saving sound to database:", err);
-    throw new Error(`Failed to save sound: ${err.message}`);
+    console.error('Failed to save sound:', err);
+    throw err;
   }
 }
 
 export async function getAllSounds() {
   try {
-    const db = await getDatabase();
-    if (!db) return [];
-    
+    const db = await getDb();
     const sounds = await db.getAll('sounds');
     
-    // Validate sounds
-    return sounds.filter(sound => {
-      if (!sound.data) {
-        console.warn(`Sound ${sound.id} is missing data, skipping`);
-        return false;
-      }
-      return true;
-    }).map(sound => {
-      // Ensure volume property exists for backward compatibility
-      if (sound.volume === undefined) {
-        sound.volume = 0.7;
-      }
-      return sound;
-    });
-  } catch (error) {
-    console.error("Error getting sounds:", error);
+    // Filter out invalid sounds and ensure volume property
+    return sounds
+      .filter(sound => sound && sound.data && typeof sound.data === 'string')
+      .map(sound => ({
+        ...sound,
+        volume: sound.volume ?? 0.7
+      }));
+  } catch (err) {
+    console.error('Failed to get sounds:', err);
     return [];
   }
 }
 
 export async function getSound(id) {
   try {
-    const db = await getDatabase();
-    if (!db) return null;
-    
+    const db = await getDb();
     return await db.get('sounds', id);
-  } catch (error) {
-    console.error("Error getting sound:", error);
+  } catch (err) {
+    console.error('Failed to get sound:', err);
     return null;
   }
 }
 
 export async function deleteSound(id) {
   try {
-    const db = await getDatabase();
-    if (!db) return false;
-    
+    const db = await getDb();
     await db.delete('sounds', id);
     return true;
-  } catch (error) {
-    console.error("Error deleting sound:", error);
+  } catch (err) {
+    console.error('Failed to delete sound:', err);
     return false;
   }
 }
 
 export async function clearAllSounds() {
   try {
-    const db = await getDatabase();
-    if (!db) return false;
-    
+    const db = await getDb();
     await db.clear('sounds');
     return true;
-  } catch (error) {
-    console.error("Error clearing sounds:", error);
+  } catch (err) {
+    console.error('Failed to clear sounds:', err);
     return false;
   }
 }
 
-// Group operations
+/**
+ * Group operations
+ */
 export async function saveGroup(group) {
-  if (!group.id) {
-    group.id = `group_${Date.now()}`;
-  }
-  
   try {
-    const db = await getDatabase();
-    if (!db) return null;
+    if (!group.id) {
+      group.id = `group_${Date.now()}`;
+    }
     
+    const db = await getDb();
     await db.put('groups', group);
     return group;
-  } catch (error) {
-    console.error("Error saving group:", error);
-    return null;
+  } catch (err) {
+    console.error('Failed to save group:', err);
+    throw err;
   }
 }
 
 export async function getAllGroups() {
   try {
-    const db = await getDatabase();
-    if (!db) return [];
-    
+    const db = await getDb();
     return await db.getAll('groups');
-  } catch (error) {
-    console.error("Error getting groups:", error);
+  } catch (err) {
+    console.error('Failed to get groups:', err);
     return [];
   }
 }
 
 export async function getGroup(id) {
   try {
-    const db = await getDatabase();
-    if (!db) return null;
-    
+    const db = await getDb();
     return await db.get('groups', id);
-  } catch (error) {
-    console.error("Error getting group:", error);
+  } catch (err) {
+    console.error('Failed to get group:', err);
     return null;
   }
 }
 
 export async function deleteGroup(id) {
   try {
-    const db = await getDatabase();
-    if (!db) return false;
-    
+    const db = await getDb();
     await db.delete('groups', id);
     return true;
-  } catch (error) {
-    console.error("Error deleting group:", error);
+  } catch (err) {
+    console.error('Failed to delete group:', err);
     return false;
   }
 }
 
 export async function clearAllGroups() {
   try {
-    const db = await getDatabase();
-    if (!db) return false;
-    
+    const db = await getDb();
     await db.clear('groups');
     return true;
-  } catch (error) {
-    console.error("Error clearing groups:", error);
+  } catch (err) {
+    console.error('Failed to clear groups:', err);
     return false;
   }
 }
 
-// Get sounds by group
 export async function getSoundsByGroup(groupId) {
   try {
-    const db = await getDatabase();
-    if (!db) return [];
-    
+    const db = await getDb();
     const tx = db.transaction('sounds', 'readonly');
     const index = tx.store.index('groupId');
-    return await index.getAll(groupId);
-  } catch (error) {
-    console.error("Error getting sounds by group:", error);
-    return [];
-  }
-}
-
-// Reset entire database - modified to always use cleanDatabases
-export async function resetDatabase() {
-  try {
-    // Delete all databases and clear caches
-    await cleanDatabases();
-    await clearCaches();
-    
-    // Force a page reload to reinitialize everything cleanly
-    window.location.reload(true);
-    
-    return true;
-  } catch (error) {
-    console.error("Error resetting database:", error);
-    return false;
-  }
-}
-
-// Check and clear old database on first load
-export async function initializeDatabase() {
-  try {
-    // Delete any legacy databases
-    await cleanDatabases();
-    
-    // Wait for database to be ready
-    const db = await getDatabase();
-    if (db) {
-      console.log(`Database initialized: v${db.version}`);
-      return true;
-    }
-    return false;
+    const sounds = await index.getAll(groupId);
+    return sounds;
   } catch (err) {
-    console.error('Database initialization error:', err);
-    return false;
+    console.error('Failed to get sounds by group:', err);
+    return [];
   }
 } 

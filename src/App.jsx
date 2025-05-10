@@ -202,10 +202,12 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [masterVolume, setMasterVolume] = useState(1.0);
   const [dragMode, setDragMode] = useState(false); // New state for drag mode
+  const [audioContextInitialized, setAudioContextInitialized] = useState(false); // Track audio context
   
   // Refs
   const fileInputRef = useRef();
   const audioContextRef = useRef(null);
+  const audioSourcesRef = useRef({});
   
   // Function to cancel all loading operations
   const cancelLoadingOperations = (exceptId = null) => {
@@ -231,12 +233,66 @@ export default function App() {
     }
   };
   
-  // Get audio context
+  // Initialize audio context only after user interaction
+  useEffect(() => {
+    // Function to create and unlock AudioContext
+    const setupAudio = async () => {
+      try {
+        // Only create if not already created
+        if (!audioContextRef.current) {
+          console.log('Creating AudioContext...');
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          audioContextRef.current = new AudioContext();
+        }
+        
+        // Try to resume if suspended
+        if (audioContextRef.current.state === 'suspended') {
+          console.log('Resuming AudioContext...');
+          await audioContextRef.current.resume();
+        }
+        
+        setAudioContextInitialized(true);
+        console.log('AudioContext initialized:', audioContextRef.current.state);
+        
+        // Remove event listeners
+        document.removeEventListener('click', setupAudio);
+        document.removeEventListener('touchstart', setupAudio);
+        document.removeEventListener('keydown', setupAudio);
+      } catch (err) {
+        console.warn('AudioContext initialization error:', err);
+      }
+    };
+    
+    // Add event listeners for user interaction
+    document.addEventListener('click', setupAudio);
+    document.addEventListener('touchstart', setupAudio);
+    document.addEventListener('keydown', setupAudio);
+    
+    return () => {
+      // Clean up listeners
+      document.removeEventListener('click', setupAudio);
+      document.removeEventListener('touchstart', setupAudio);
+      document.removeEventListener('keydown', setupAudio);
+      
+      // Close AudioContext if it exists
+      if (audioContextRef.current) {
+        try {
+          audioContextRef.current.close().catch(err => {
+            console.warn('Error closing AudioContext:', err);
+          });
+        } catch (err) {
+          console.warn('Error closing AudioContext:', err);
+        }
+      }
+    };
+  }, []);
+  
+  // Get audio context - only create on demand, not at startup
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
-      // Create audio context on first use (helps with browser autoplay policies)
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       audioContextRef.current = new AudioContext();
+      setAudioContextInitialized(true); // Try to unlock it right away
     }
     return audioContextRef.current;
   }, []);
@@ -265,15 +321,26 @@ export default function App() {
 
   // Load sounds and groups from IndexedDB on mount
   useEffect(() => {
+    let mounted = true;
+    
     const loadData = async () => {
+      if (!mounted) return;
+      
       try {
+        console.log('Loading data from database...');
         setLoading(true);
+        
+        // Get groups data
         const groupsData = await getAllGroups();
-        setGroups(groupsData || []);
+        if (mounted) {
+          setGroups(groupsData || []);
+        }
         
+        // Get sounds data
         const soundsData = await getAllSounds();
+        if (!mounted) return; // Check mounted again
         
-        // Filter out sounds with invalid data
+        // Filter out invalid sounds
         const validSounds = soundsData.filter(sound => {
           const isValid = sound && sound.data && typeof sound.data === 'string' && sound.data.trim() !== '';
           if (!isValid) {
@@ -282,114 +349,63 @@ export default function App() {
           return isValid;
         });
         
+        // Update state with valid sounds
         setSounds(validSounds || []);
         
-        // Initialize volume settings from loaded sounds
+        // Initialize volume settings
         const initialVolumes = {};
         validSounds.forEach(sound => {
           initialVolumes[sound.id] = sound.volume || 0.7;
         });
         setVolumes(initialVolumes);
-
-        // If no sounds were loaded but we should have some, try again after a delay
-        // This helps with browser issues where IndexedDB might not be fully ready
-        if (validSounds.length === 0) {
-          console.log("No sounds loaded on first try, scheduling retry...");
-          setTimeout(() => {
-            console.log("Retrying data load...");
-            loadData();
-          }, 1000);
-        }
+        
+        console.log(`Successfully loaded ${validSounds.length} sounds and ${groupsData.length} groups`);
       } catch (err) {
-        console.error("Error loading data from IndexedDB:", err);
-        setError("Failed to load sounds. Please try resetting the database.");
+        console.error('Error loading data:', err);
+        if (mounted) {
+          setError('Failed to load sounds. Please try resetting the database.');
+        }
       } finally {
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     };
     
-    // Initial data load
+    // Load data immediately
     loadData();
     
-    // Add visibility change handler to reload data when tab becomes visible again
-    // This helps with browser going to sleep or tab switching
+    // Set up reload on visibility change (e.g. when coming back to tab)
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        console.log("Tab became visible again, reloading data...");
+      if (document.visibilityState === 'visible' && mounted) {
+        console.log('Tab became visible, refreshing data...');
         loadData();
       }
     };
     
-    // Event listener for service worker updates
-    const handleSWUpdate = () => {
-      console.log("Service worker was updated, reloading data...");
-      loadData();
-    };
-    
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    document.addEventListener('sw-updated', handleSWUpdate);
     
+    // Cleanup function
     return () => {
+      mounted = false;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      document.removeEventListener('sw-updated', handleSWUpdate);
-    };
-  }, []);
-  
-  // Clean up audio when component unmounts
-  useEffect(() => {
-    return () => {
-      // Clean up all audio resources on unmount
+      
+      // Also cleanup any audio resources
       Object.values(audioMap).forEach(audio => {
         if (audio) {
           try {
-            // Stop playback
             audio.pause();
-            
-            // Remove event listeners to prevent memory leaks
+            audio.src = '';
             audio.onended = null;
             audio.ontimeupdate = null;
             audio.onerror = null;
-            
-            // Clear source
-            audio.src = '';
           } catch (err) {
             console.warn('Error cleaning up audio:', err);
           }
         }
       });
     };
-  }, [audioMap]);
-  
-  // Initialize audio context on user interaction to meet browser requirements
-  useEffect(() => {
-    const initAudioContext = () => {
-      const context = getAudioContext();
-      
-      // Resume suspended context
-      if (context.state === 'suspended') {
-        context.resume().catch(err => {
-          console.error('Failed to resume audio context:', err);
-        });
-      }
-      
-      // Remove event listeners after first interaction
-      document.removeEventListener('click', initAudioContext);
-      document.removeEventListener('touchstart', initAudioContext);
-      document.removeEventListener('keydown', initAudioContext);
-    };
-    
-    // Add event listeners for user interaction
-    document.addEventListener('click', initAudioContext);
-    document.addEventListener('touchstart', initAudioContext);
-    document.addEventListener('keydown', initAudioContext);
-    
-    return () => {
-      // Clean up event listeners
-      document.removeEventListener('click', initAudioContext);
-      document.removeEventListener('touchstart', initAudioContext);
-      document.removeEventListener('keydown', initAudioContext);
-    };
-  }, [getAudioContext]);
+  }, []);
   
   // Handle category change
   const handleCategoryChange = (event, newValue) => {
@@ -426,9 +442,6 @@ export default function App() {
         return;
       }
       
-      // Get audio context for this session
-      getAudioContext();
-      
       // If already playing, stop it
       if (playing[sound.id]) {
         // Get the audio element
@@ -447,92 +460,113 @@ export default function App() {
         return;
       }
       
+      // Initialize AudioContext on demand
+      if (!audioContextRef.current) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioContextRef.current = new AudioContext();
+        
+        // If suspended, try to resume
+        if (audioContextRef.current.state === 'suspended') {
+          try {
+            await audioContextRef.current.resume();
+          } catch (err) {
+            console.warn('Could not resume AudioContext:', err);
+          }
+        }
+      }
+      
       // Create a new Audio element
       const audio = new Audio();
       
-      // Set audio source
+      // Set audio properties
       audio.src = sound.data;
       audio.preload = 'auto';
+      audio.loop = !!looping[sound.id];
       
       // Set volume based on sound settings and master volume
       const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
       audio.volume = Math.max(0, Math.min(1, baseVolume * masterVolume));
       
-      // Set loop status if needed
-      audio.loop = !!looping[sound.id];
-      
-      // Update the audio map with this new audio element
-      setAudioMap(prev => {
-        const newMap = { ...prev };
-        // If there's already audio for this sound, clean it up
-        if (newMap[sound.id]) {
-          try {
-            newMap[sound.id].pause();
-            newMap[sound.id].src = '';
-          } catch (e) {
-            console.warn('Error cleaning up old audio:', e);
-          }
-        }
-        newMap[sound.id] = audio;
-        return newMap;
-      });
-      
-      // Set initial position to 0
-      setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
-      
-      // Set up event listeners
+      // Set up event handlers
       const onEnded = () => {
-        // Only update state if not looping (looping is handled by audio.loop)
         if (!looping[sound.id]) {
           setPlaying(prev => ({ ...prev, [sound.id]: false }));
+          setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
         }
-      };
-      
-      const onError = (event) => {
-        console.error(`Audio error (${sound.name}):`, event);
-        
-        if (audio.error && audio.error.code !== 4) {
-          setError(`Error playing "${sound.name}": ${audio.error?.message || 'Unknown error'}`);
-        }
-        
-        // Update state to reflect that we're not playing
-        setPlaying(prev => ({ ...prev, [sound.id]: false }));
       };
       
       const onTimeUpdate = () => {
         setAudioPositions(prev => ({ ...prev, [sound.id]: audio.currentTime }));
       };
       
+      const onError = (e) => {
+        console.error(`Audio playback error for ${sound.name}:`, e);
+        setPlaying(prev => ({ ...prev, [sound.id]: false }));
+        setError(`Error playing "${sound.name}": ${audio.error?.message || 'Unknown error'}`);
+      };
+      
       // Add event listeners
       audio.addEventListener('ended', onEnded);
-      audio.addEventListener('error', onError);
       audio.addEventListener('timeupdate', onTimeUpdate);
+      audio.addEventListener('error', onError);
       
-      // Start playback
+      // Try to play the sound
+      let playSuccess = false;
       try {
-        const playPromise = audio.play();
-        
-        // Modern browsers return a promise from play()
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              // Successful playback
-              setPlaying(prev => ({ ...prev, [sound.id]: true }));
-            })
-            .catch(err => {
-              console.warn('Error playing audio:', err);
-              
-              if (err.name === 'NotAllowedError') {
-                setError('Playback was prevented. Please interact with the page first.');
-              } else {
-                setError(`Error playing "${sound.name}": ${err.message}`);
-              }
-            });
-        }
+        // Play with a catch for autoplay restrictions
+        await audio.play();
+        playSuccess = true;
       } catch (err) {
-        console.error('Error in handlePlayPause:', err);
-        setError(`Playback error: ${err.message}`);
+        // Handle autoplay policy error
+        if (err.name === 'NotAllowedError') {
+          console.warn('Autoplay prevented, trying to unlock audio...');
+          
+          // Create unlock function
+          const unlockAudio = async () => {
+            try {
+              await audioContextRef.current.resume();
+              await audio.play();
+              playSuccess = true;
+              
+              // Update state
+              setPlaying(prev => ({ ...prev, [sound.id]: true }));
+              
+              // Remove event listeners after successful play
+              document.removeEventListener('click', unlockAudio);
+              document.removeEventListener('touchstart', unlockAudio);
+              document.removeEventListener('keydown', unlockAudio);
+            } catch (unlockErr) {
+              console.error('Failed to unlock audio:', unlockErr);
+              setError('Please interact with the page to enable audio playback');
+            }
+          };
+          
+          // Add temporary listeners to unlock audio on user interaction
+          document.addEventListener('click', unlockAudio, { once: true });
+          document.addEventListener('touchstart', unlockAudio, { once: true });
+          document.addEventListener('keydown', unlockAudio, { once: true });
+          
+          setError('Audio playback requires user interaction. Please tap or click anywhere.');
+        } else {
+          console.error('Audio play error:', err);
+          setError(`Couldn't play sound: ${err.message}`);
+        }
       }
+      
+      // Only update state if play was successful
+      if (playSuccess) {
+        setPlaying(prev => ({ ...prev, [sound.id]: true }));
+      }
+      
+      // Update audio map
+      setAudioMap(prev => ({
+        ...prev,
+        [sound.id]: audio
+      }));
+      
+      // Initialize position
+      setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
+      
     } catch (err) {
       console.error('Error in handlePlayPause:', err);
       setError(`Playback error: ${err.message}`);
@@ -604,30 +638,44 @@ export default function App() {
   
   // Stop all playing sounds
   const stopAllSounds = () => {
-    // Stop and clean up all audio elements
-    Object.entries(audioMap).forEach(([id, audio]) => {
-      if (audio) {
-        // Remove all event listeners
-        audio.onended = null;
-        audio.ontimeupdate = null;
-        audio.oncanplaythrough = null;
-        audio.onerror = null;
-        
-        // Stop playback
-        audio.pause();
-        audio.currentTime = 0;
-        
-        // Clear source
-        audio.src = '';
-      }
-    });
-    
-    // Reset all state
-    setPlaying({});
-    setAudioPositions({}); // Clear all positions
-    
-    // Create a new audio map to ensure clean state
-    setAudioMap({});
+    try {
+      // Get a list of all currently playing sound IDs
+      const playingSoundIds = Object.entries(playing)
+        .filter(([_, isPlaying]) => isPlaying)
+        .map(([id]) => id);
+      
+      // Stop each sound individually
+      playingSoundIds.forEach(id => {
+        const audio = audioMap[id];
+        if (audio) {
+          // Remove event listeners
+          audio.onended = null;
+          audio.ontimeupdate = null;
+          audio.oncanplaythrough = null;
+          audio.onerror = null;
+          
+          // Stop playback
+          try {
+            audio.pause();
+            audio.currentTime = 0;
+          } catch (err) {
+            console.warn(`Error stopping sound ${id}:`, err);
+          }
+          
+          // Clear source
+          audio.src = '';
+        }
+      });
+      
+      // Update state
+      setPlaying({});
+      setAudioPositions({});
+      
+      console.log(`Stopped ${playingSoundIds.length} sounds`);
+    } catch (err) {
+      console.error('Error stopping all sounds:', err);
+      setError('Failed to stop all sounds');
+    }
   };
   
   // Handle add sound dialog
@@ -795,9 +843,13 @@ export default function App() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistrations().then(
         registrations => {
-          registrations.forEach(registration => {
-            registration.unregister();
-          });
+          if (registrations.length > 1) {
+            console.log(`Found ${registrations.length} service workers, cleaning up...`);
+            // Keep only the most recent one
+            registrations.slice(0, -1).forEach(registration => {
+              registration.unregister();
+            });
+          }
         }
       ).catch(err => {
         console.error('Service worker unregister failed:', err);

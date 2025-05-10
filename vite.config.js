@@ -51,14 +51,36 @@ export default defineConfig({
   server: {
     // Use random port to avoid conflicts
     port: getRandomPort(),
-    strictPort: true, // Error if port is in use instead of trying another
+    strictPort: false, // Try another port if the port is in use
     host: 'localhost', // Bind only to localhost
     hmr: {
-      // Disable auto websocket port selection
-      clientPort: getRandomPort(),
-      port: getRandomPort(),
-      host: 'localhost',
-      protocol: 'ws'
+      // Use a separate port for HMR to avoid conflicts
+      port: getRandomPort() + 1000,
+      // Don't try to reconnect forever, give up after 3 attempts
+      reconnect: 3,
+      // Disable overlay that can cause issues
+      overlay: false,
+    },
+    // Add this to properly close the previous server before starting a new one
+    force: true,
+    watch: {
+      // Use polling for file changes with a longer interval to reduce CPU usage
+      usePolling: false,
+      interval: 1000,
+      // Ignore these files to avoid unnecessary rebuilds
+      ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**']
     }
+  },
+  optimizeDeps: {
+    // Force Vite to scan all files when processing dependencies
+    force: false,
+    // Don't exclude node_modules from optimization
+    exclude: []
+  },
+  // Don't try to automatically open browser
+  open: false,
+  // Define custom environment variables that can be accessed in the app
+  define: {
+    'import.meta.env.VITE_APP_PORT': JSON.stringify(getRandomPort())
   }
 }); 
