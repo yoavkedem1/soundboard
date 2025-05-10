@@ -1,0 +1,28 @@
+
+[1m[34m🧙 Fantasy Soundboard Diagnostics 🧙[0m
+
+[33mStarting diagnostic tests...[0m
+
+[33mLaunching app...[0m
+[32m✓ App loaded[0m
+[33mWaiting for app to initialize...[0m
+
+[1m[34m=== Diagnostic Results ===[0m
+
+[32m✓ No WebSocket connection issues detected[0m
+
+[32m✓ No MUI Tooltip issues detected[0m
+
+[33mPerforming interactive testing...[0m
+[32m✓ Screenshot captured: test-results/app-screenshot.png[0m
+[33mChecking for UI flashing issues...[0m
+[32m✓ No UI flashing detected[0m
+
+[1m[34m=== Summary ===[0m
+[1mTotal errors: 0[0m
+[1m- WebSocket issues: 0[0m
+[1m- MUI Tooltip issues: 0[0m
+[1m- Other issues: 0[0m
+
+[32m✅ Tests completed! Closing browser automatically...[0m
+

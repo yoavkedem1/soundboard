@@ -18,6 +18,17 @@ const getBase = () => {
   return '/';
 };
 
+// Get random port to avoid conflicts
+const getRandomPort = () => {
+  // Use specific port if provided, otherwise use random port in a high range
+  if (process.env.VITE_PORT) {
+    return parseInt(process.env.VITE_PORT, 10);
+  }
+  
+  // Use a random port between 4500-5500 by default
+  return 4500 + Math.floor(Math.random() * 1000);
+};
+
 export default defineConfig({
   plugins: [react()],
   base: getBase(),
@@ -35,6 +46,19 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
+    }
+  },
+  server: {
+    // Use random port to avoid conflicts
+    port: getRandomPort(),
+    strictPort: true, // Error if port is in use instead of trying another
+    host: 'localhost', // Bind only to localhost
+    hmr: {
+      // Disable auto websocket port selection
+      clientPort: getRandomPort(),
+      port: getRandomPort(),
+      host: 'localhost',
+      protocol: 'ws'
     }
   }
 }); 

@@ -4,7 +4,9 @@ import {
   IconButton, ThemeProvider, createTheme, CssBaseline, Container, 
   Dialog, DialogTitle, DialogContent, DialogActions, Button, 
   TextField, CircularProgress, MenuItem, Select, InputLabel,
-  FormControl, Alert, Snackbar, LinearProgress
+  FormControl, Alert, Snackbar, LinearProgress, ToggleButton,
+  Slider, Badge, Tooltip, ClickAwayListener, Drawer, Chip, Divider,
+  List, ListItem, ListItemText, ListItemIcon, ListItemSecondaryAction
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import LoopIcon from '@mui/icons-material/Loop';
@@ -13,21 +15,31 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CategoryIcon from '@mui/icons-material/Category';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+import VolumeDownIcon from '@mui/icons-material/VolumeDown';
+import VolumeMuteIcon from '@mui/icons-material/VolumeMute';
+import VolumeOffIcon from '@mui/icons-material/VolumeOff';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import TuneIcon from '@mui/icons-material/Tune';
+import MusicNoteIcon from '@mui/icons-material/MusicNote';
+import StopIcon from '@mui/icons-material/Stop';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import { saveSound, getAllSounds, deleteSound, saveGroup, getAllGroups, resetDatabase, initializeDatabase } from './db';
 
-// Import placeholder assets to enable proper bundling
-import placeholderIcon from '../public/icons/icon-placeholder.svg';
+// No longer needed - remove any references to the placeholder icon
+// import placeholderIcon from './icons/icon-placeholder.svg';
 
-// Create a fantasy-themed MUI theme
+// Create a fantasy-themed MUI theme that better follows Material Design 3
 const theme = createTheme({
   palette: {
+    mode: 'light',
     primary: { main: '#8b5a2b' },
     secondary: { main: '#e3d5b8' },
     background: {
       default: '#f8f4e5',
       paper: '#f8f4e5',
     },
+    error: { main: '#B3261E' }, // MD3 error color
   },
   shape: { borderRadius: 16 },
   typography: {
@@ -43,24 +55,32 @@ const theme = createTheme({
       color: '#5a3921',
     },
     h6: { fontWeight: 700 },
+    button: {
+      textTransform: 'none',
+      fontWeight: 500,
+    }
   },
   components: {
     MuiPaper: {
       styleOverrides: {
         root: {
           backgroundImage: 'url("https://www.transparenttextures.com/patterns/parchment.png")',
+          transition: 'all 0.3s ease',
         },
       },
     },
     MuiButton: {
       styleOverrides: {
         root: {
-          borderRadius: 20,
+          borderRadius: 100, // More circular buttons per MD3
           textTransform: 'none',
           fontWeight: 'bold',
+          transition: 'all 0.2s ease',
+          padding: '8px 24px',
         },
         containedPrimary: {
           color: '#fff',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.3)', // Lighter shadow per MD3
         },
       },
     },
@@ -68,20 +88,55 @@ const theme = createTheme({
       styleOverrides: {
         root: {
           color: '#5a3921',
+          transition: 'all 0.2s ease',
         },
       },
     },
     MuiTab: {
       styleOverrides: {
         root: {
-          borderRadius: 20,
+          borderRadius: 100, // More circular tabs per MD3
           minWidth: 'auto',
           padding: '8px 16px',
           marginRight: '8px',
           fontWeight: 'bold',
+          transition: 'all 0.2s ease',
         },
       },
     },
+    MuiSlider: {
+      styleOverrides: {
+        root: {
+          color: 'rgba(255,255,255,0.8)',
+          height: 6,
+        },
+        thumb: {
+          width: 16,
+          height: 16,
+        },
+      },
+    },
+    MuiFab: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0 3px 5px rgba(0,0,0,0.2)', // Lighter shadow per MD3
+        }
+      }
+    },
+    MuiDialogActions: {
+      styleOverrides: {
+        root: {
+          padding: '16px 24px', // More space per MD3
+        }
+      }
+    },
+    MuiAlert: {
+      styleOverrides: {
+        root: {
+          borderRadius: 12,
+        }
+      }
+    }
   },
 });
 
@@ -107,6 +162,16 @@ function fileToDataURL(file) {
 
 const predefinedCategories = ['Ambience', 'Combat', 'Music', 'Voices', 'Special Effects'];
 
+// Sound-related emoji collection
+const emojiOptions = [
+  '🔊', '🔈', '🔉', '🔇', '🎵', '🎶', '🎸', '🎺', '🎷', '🥁', 
+  '🎻', '🎹', '🎤', '🎧', '🔔', '🔕', '📣', '📯', '🎼', '🎙️',
+  '👏', '👋', '👣', '🐾', '💥', '⚡', '🔥', '💧', '🌊', '💨',
+  '🌬️', '🌧️', '⛈️', '🌩️', '🌪️', '😱', '😭', '😤', '🐺', '🐉',
+  '🐲', '🦁', '🐯', '🐻', '🐴', '🦊', '🦉', '🦇', '🐦', '🐮',
+  '⚔️', '🛡️', '🏹', '🪄', '✨', '💫', '🌟', '🔮', '🧙', '🧝‍♂️'
+];
+
 export default function App() {
   // State
   const [currentTab, setCurrentTab] = useState(0);
@@ -117,6 +182,8 @@ export default function App() {
   const [looping, setLooping] = useState({});
   const [audioMap, setAudioMap] = useState({});
   const [audioPositions, setAudioPositions] = useState({});
+  const [volumes, setVolumes] = useState({}); // New state for volume control
+  const [showVolumeControls, setShowVolumeControls] = useState({}); // Which sound's volume controls to show
   const [addSoundOpen, setAddSoundOpen] = useState(false);
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [newSound, setNewSound] = useState({
@@ -124,12 +191,17 @@ export default function App() {
     file: null,
     color: '#8b5a2b',
     emoji: '🔊',
-    groupId: ''
+    groupId: '',
+    volume: 0.7 // Default volume
   });
   const [newGroup, setNewGroup] = useState({ name: '' });
   const [error, setError] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [loadingOperations, setLoadingOperations] = useState({});
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [masterVolume, setMasterVolume] = useState(1.0);
+  const [dragMode, setDragMode] = useState(false); // New state for drag mode
   
   // Refs
   const fileInputRef = useRef();
@@ -200,7 +272,34 @@ export default function App() {
         setGroups(groupsData || []);
         
         const soundsData = await getAllSounds();
-        setSounds(soundsData || []);
+        
+        // Filter out sounds with invalid data
+        const validSounds = soundsData.filter(sound => {
+          const isValid = sound && sound.data && typeof sound.data === 'string' && sound.data.trim() !== '';
+          if (!isValid) {
+            console.warn('Found invalid sound data, will be ignored:', sound);
+          }
+          return isValid;
+        });
+        
+        setSounds(validSounds || []);
+        
+        // Initialize volume settings from loaded sounds
+        const initialVolumes = {};
+        validSounds.forEach(sound => {
+          initialVolumes[sound.id] = sound.volume || 0.7;
+        });
+        setVolumes(initialVolumes);
+
+        // If no sounds were loaded but we should have some, try again after a delay
+        // This helps with browser issues where IndexedDB might not be fully ready
+        if (validSounds.length === 0) {
+          console.log("No sounds loaded on first try, scheduling retry...");
+          setTimeout(() => {
+            console.log("Retrying data load...");
+            loadData();
+          }, 1000);
+        }
       } catch (err) {
         console.error("Error loading data from IndexedDB:", err);
         setError("Failed to load sounds. Please try resetting the database.");
@@ -209,20 +308,88 @@ export default function App() {
       }
     };
     
+    // Initial data load
     loadData();
+    
+    // Add visibility change handler to reload data when tab becomes visible again
+    // This helps with browser going to sleep or tab switching
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log("Tab became visible again, reloading data...");
+        loadData();
+      }
+    };
+    
+    // Event listener for service worker updates
+    const handleSWUpdate = () => {
+      console.log("Service worker was updated, reloading data...");
+      loadData();
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('sw-updated', handleSWUpdate);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('sw-updated', handleSWUpdate);
+    };
   }, []);
   
   // Clean up audio when component unmounts
   useEffect(() => {
     return () => {
+      // Clean up all audio resources on unmount
       Object.values(audioMap).forEach(audio => {
         if (audio) {
-          audio.pause();
-          audio.src = '';
+          try {
+            // Stop playback
+            audio.pause();
+            
+            // Remove event listeners to prevent memory leaks
+            audio.onended = null;
+            audio.ontimeupdate = null;
+            audio.onerror = null;
+            
+            // Clear source
+            audio.src = '';
+          } catch (err) {
+            console.warn('Error cleaning up audio:', err);
+          }
         }
       });
     };
   }, [audioMap]);
+  
+  // Initialize audio context on user interaction to meet browser requirements
+  useEffect(() => {
+    const initAudioContext = () => {
+      const context = getAudioContext();
+      
+      // Resume suspended context
+      if (context.state === 'suspended') {
+        context.resume().catch(err => {
+          console.error('Failed to resume audio context:', err);
+        });
+      }
+      
+      // Remove event listeners after first interaction
+      document.removeEventListener('click', initAudioContext);
+      document.removeEventListener('touchstart', initAudioContext);
+      document.removeEventListener('keydown', initAudioContext);
+    };
+    
+    // Add event listeners for user interaction
+    document.addEventListener('click', initAudioContext);
+    document.addEventListener('touchstart', initAudioContext);
+    document.addEventListener('keydown', initAudioContext);
+    
+    return () => {
+      // Clean up event listeners
+      document.removeEventListener('click', initAudioContext);
+      document.removeEventListener('touchstart', initAudioContext);
+      document.removeEventListener('keydown', initAudioContext);
+    };
+  }, [getAudioContext]);
   
   // Handle category change
   const handleCategoryChange = (event, newValue) => {
@@ -240,229 +407,148 @@ export default function App() {
     return sound.groupId === category.id;
   });
   
-  // Initialize audio context on first interaction
-  useEffect(() => {
-    const handleFirstInteraction = () => {
-      // Create audio context on first user interaction
-      getAudioContext();
-      // Remove the event listeners after first interaction
-      document.removeEventListener('click', handleFirstInteraction);
-      document.removeEventListener('touchstart', handleFirstInteraction);
-    };
-    
-    document.addEventListener('click', handleFirstInteraction);
-    document.addEventListener('touchstart', handleFirstInteraction);
-    
-    return () => {
-      document.removeEventListener('click', handleFirstInteraction);
-      document.removeEventListener('touchstart', handleFirstInteraction);
-    };
-  }, []);
+  // Function to validate sound data source
+  const isSoundDataValid = (sound) => {
+    if (!sound) return false;
+    if (!sound.data || typeof sound.data !== 'string') return false;
+    if (sound.data.trim() === '') return false;
+    // Check if data is a valid data URL
+    if (!sound.data.startsWith('data:')) return false;
+    return true;
+  };
   
-  // Handle play/pause with more robust error handling and sound switching
+  // Handle play/pause for a sound
   const handlePlayPause = async (sound) => {
-    const id = sound.id;
-    
     try {
-      // If already playing, pause it
-      if (playing[id]) {
-        const audio = audioMap[id];
-        if (audio) {
-          audio.pause();
-          // Reset the audio if it has looping disabled
-          if (!looping[id]) {
-            audio.currentTime = 0;
-          }
-        }
-        
-        setPlaying(prev => {
-          const newState = { ...prev };
-          delete newState[id];
-          return newState;
-        });
+      if (!isSoundDataValid(sound)) {
+        console.error('Invalid sound data:', sound);
+        setError(`Cannot play sound "${sound.name}": Invalid sound data`);
         return;
       }
       
-      // Cancel any ongoing loading operations
-      cancelLoadingOperations(id);
+      // Get audio context for this session
+      getAudioContext();
       
-      // Ensure audio context is running
-      const audioContext = getAudioContext();
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-      }
-      
-      // IMPORTANT: Clean up any existing audio elements before creating new ones
-      // This fixes the issue when switching between sounds rapidly
-      Object.entries(playing).forEach(([playingId, isPlaying]) => {
-        if (isPlaying && playingId !== id) {
-          const existingAudio = audioMap[playingId];
-          if (existingAudio) {
-            existingAudio.pause();
-            existingAudio.currentTime = 0;
+      // If already playing, stop it
+      if (playing[sound.id]) {
+        // Get the audio element
+        const audioElement = audioMap[sound.id];
+        if (audioElement) {
+          try {
+            // Pause the audio
+            audioElement.pause();
+            
+            // Update playing state
+            setPlaying(prev => ({ ...prev, [sound.id]: false }));
+          } catch (err) {
+            console.error('Error stopping audio:', err);
           }
         }
-      });
+        return;
+      }
       
-      // Reset playing state to prevent multiple sounds from being marked as playing
-      // but not actually playing due to errors
-      setPlaying({});
-      
-      // Create a new audio element for reliability when switching sounds
+      // Create a new Audio element
       const audio = new Audio();
       
-      // Make sure to set event handlers before loading audio
-      audio.loop = !!looping[id];
+      // Set audio source
+      audio.src = sound.data;
+      audio.preload = 'auto';
       
-      // Handle audio ending
-      audio.addEventListener('ended', function onEnded() {
-        if (!this.loop) {
-          setPlaying(prev => {
-            const newState = { ...prev };
-            delete newState[id];
-            return newState;
-          });
-        }
-      });
+      // Set volume based on sound settings and master volume
+      const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
+      audio.volume = Math.max(0, Math.min(1, baseVolume * masterVolume));
       
-      // Handle errors
-      audio.addEventListener('error', function onError(err) {
-        console.error("Audio playback error:", err);
-        setPlaying(prev => {
-          const newState = { ...prev };
-          delete newState[id];
-          return newState;
-        });
-        setError("Could not play sound. Try using a different browser or format.");
-      });
+      // Set loop status if needed
+      audio.loop = !!looping[sound.id];
       
-      // Add time update event to track position
-      audio.addEventListener('timeupdate', function onTimeUpdate() {
-        setAudioPositions(prev => ({
-          ...prev,
-          [id]: {
-            current: this.currentTime,
-            duration: this.duration || sound.duration || 0
+      // Update the audio map with this new audio element
+      setAudioMap(prev => {
+        const newMap = { ...prev };
+        // If there's already audio for this sound, clean it up
+        if (newMap[sound.id]) {
+          try {
+            newMap[sound.id].pause();
+            newMap[sound.id].src = '';
+          } catch (e) {
+            console.warn('Error cleaning up old audio:', e);
           }
-        }));
-      });
-      
-      // Initialize with zeroed position to fix progress bar
-      setAudioPositions(prev => ({
-        ...prev,
-        [id]: {
-          current: 0,
-          duration: sound.duration || 0
         }
-      }));
-      
-      // Set up audio with proper loading sequence
-      audio.preload = "auto";
-      
-      // Set the source and wait for it to be ready
-      const sourcePromise = new Promise((resolve, reject) => {
-        // Create an AbortController for this operation
-        const abortController = new AbortController();
-        
-        // Store cancel function
-        setLoadingOperations(prev => ({
-          ...prev,
-          [id]: () => {
-            abortController.abort();
-            reject(new Error('Operation cancelled'));
-          }
-        }));
-        
-        // Set up event listeners for loading
-        audio.oncanplaythrough = resolve;
-        audio.onerror = reject;
-        
-        // Set timeout for loading
-        const timeout = setTimeout(() => {
-          audio.oncanplaythrough = null;
-          audio.onerror = null;
-          reject(new Error("Audio loading timed out"));
-        }, 5000);
-        
-        // Cleanup function
-        const cleanup = () => {
-          clearTimeout(timeout);
-          audio.oncanplaythrough = null;
-          audio.onerror = null;
-          setLoadingOperations(prev => {
-            const newOps = { ...prev };
-            delete newOps[id];
-            return newOps;
-          });
-        };
-        
-        // Replace success handler to clean up
-        audio.oncanplaythrough = () => {
-          cleanup();
-          resolve();
-        };
-        
-        // Replace error handler to clean up
-        audio.onerror = (err) => {
-          cleanup();
-          reject(err);
-        };
-        
-        // Handle abort
-        abortController.signal.addEventListener('abort', () => {
-          cleanup();
-          reject(new Error('Audio loading cancelled'));
-        });
-        
-        // Set the source AFTER setting up all handlers
-        audio.src = sound.data;
+        newMap[sound.id] = audio;
+        return newMap;
       });
       
-      // Store the new audio element
-      setAudioMap(prev => ({ ...prev, [id]: audio }));
+      // Set initial position to 0
+      setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
       
-      // Wait for audio to be ready to play
-      await sourcePromise;
+      // Set up event listeners
+      const onEnded = () => {
+        // Only update state if not looping (looping is handled by audio.loop)
+        if (!looping[sound.id]) {
+          setPlaying(prev => ({ ...prev, [sound.id]: false }));
+        }
+      };
       
-      // Play the audio
-      await audio.play();
+      const onError = (event) => {
+        console.error(`Audio error (${sound.name}):`, event);
+        
+        if (audio.error && audio.error.code !== 4) {
+          setError(`Error playing "${sound.name}": ${audio.error?.message || 'Unknown error'}`);
+        }
+        
+        // Update state to reflect that we're not playing
+        setPlaying(prev => ({ ...prev, [sound.id]: false }));
+      };
       
-      // Update playing state to indicate this sound is now playing
-      setPlaying(prev => ({ ...prev, [id]: true }));
+      const onTimeUpdate = () => {
+        setAudioPositions(prev => ({ ...prev, [sound.id]: audio.currentTime }));
+      };
       
+      // Add event listeners
+      audio.addEventListener('ended', onEnded);
+      audio.addEventListener('error', onError);
+      audio.addEventListener('timeupdate', onTimeUpdate);
+      
+      // Start playback
+      try {
+        const playPromise = audio.play();
+        
+        // Modern browsers return a promise from play()
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              // Successful playback
+              setPlaying(prev => ({ ...prev, [sound.id]: true }));
+            })
+            .catch(err => {
+              console.warn('Error playing audio:', err);
+              
+              if (err.name === 'NotAllowedError') {
+                setError('Playback was prevented. Please interact with the page first.');
+              } else {
+                setError(`Error playing "${sound.name}": ${err.message}`);
+              }
+            });
+        }
+      } catch (err) {
+        console.error('Error in handlePlayPause:', err);
+        setError(`Playback error: ${err.message}`);
+      }
     } catch (err) {
-      // Handle the "Operation cancelled" error silently
-      if (err.message === 'Operation cancelled' || err.message === 'Audio loading cancelled') {
-        console.log(`Audio loading cancelled for sound: ${id}`);
-        return;
-      }
-      
-      console.error("Error playing sound:", err);
-      // Clean up the audio element on error
-      const failedAudio = audioMap[id];
-      if (failedAudio) {
-        failedAudio.pause();
-        failedAudio.src = '';
-      }
-      
-      setPlaying(prev => {
-        const newState = { ...prev };
-        delete newState[id];
-        return newState;
-      });
-      setError(`Could not play sound: ${err.message}`);
+      console.error('Error in handlePlayPause:', err);
+      setError(`Playback error: ${err.message}`);
     }
   };
   
   // Handle loop toggle
   const handleLoopToggle = (sound) => {
     const id = sound.id;
+    // Toggle the loop state
     const newLoopState = !looping[id];
     
-    // Update the loop state
+    // Update the loop state in our app
     setLooping(prev => ({ ...prev, [id]: newLoopState }));
     
-    // Update the audio if it exists
+    // If this sound is currently playing, apply the loop setting directly
     const audio = audioMap[id];
     if (audio) {
       audio.loop = newLoopState;
@@ -548,12 +634,14 @@ export default function App() {
   const handleAddSoundOpen = () => setAddSoundOpen(true);
   const handleAddSoundClose = () => {
     setAddSoundOpen(false);
+    setShowEmojiPicker(false);
     setNewSound({
       name: '',
       file: null,
       color: '#8b5a2b',
       emoji: '🔊',
-      groupId: ''
+      groupId: '',
+      volume: 0.7 // Default volume
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -585,10 +673,12 @@ export default function App() {
         name: newSound.name,
         data: data,
         color: newSound.color,
-        icon: newSound.emoji,
+        icon: newSound.emoji, // Use the emoji from the picker
+        emoji: newSound.emoji, // Store for future reference
         groupId: newSound.groupId || 'none',
         duration: Math.round(duration),
-        dateAdded: new Date().toISOString()
+        dateAdded: new Date().toISOString(),
+        volume: newSound.volume || 0.7 // Include volume in the sound object
       };
       
       // Save to database
@@ -596,6 +686,12 @@ export default function App() {
       
       // Add to state
       setSounds(prev => [...prev, savedSound]);
+      
+      // Initialize volume state for this sound
+      setVolumes(prev => ({
+        ...prev,
+        [savedSound.id]: savedSound.volume || 0.7
+      }));
       
       // Close dialog
       handleAddSoundClose();
@@ -709,13 +805,454 @@ export default function App() {
     }
   }, []);
   
+  // Toggle volume control visibility
+  const toggleVolumeControls = (id, event) => {
+    if (event) event.stopPropagation();
+    
+    // Only toggle the clicked sound and close others
+    setShowVolumeControls(prev => {
+      const newControls = {};
+      // If this one was open, close it. Otherwise open it
+      if (prev[id]) {
+        return newControls; // Empty object closes all
+      } else {
+        newControls[id] = true;
+        return newControls;
+      }
+    });
+  };
+  
+  // Handle volume change
+  const handleVolumeChange = (sound, newValue) => {
+    const id = sound.id;
+    
+    // Update the sound's base volume
+    const updatedSound = { ...sound, volume: newValue };
+    
+    // Update sounds state to reflect new volume
+    setSounds(prev => prev.map(s => s.id === id ? updatedSound : s));
+    
+    // Calculate effective volume with master volume
+    const effectiveVolume = newValue * masterVolume;
+    
+    // Update audio if playing
+    const audio = audioMap[id];
+    if (audio) {
+      audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+    }
+    
+    // Save volume preference for next play
+    saveSound(updatedSound).catch(err => {
+      console.error("Failed to save volume setting:", err);
+    });
+  };
+  
+  // Add keyboard support for volume
+  useEffect(() => {
+    // Check if any volume controls are visible
+    const hasVisibleVolumeControls = Object.values(showVolumeControls).some(isShown => isShown);
+    if (!hasVisibleVolumeControls) return;
+    
+    // Find the ID of the sound with visible volume controls
+    const activeId = Object.entries(showVolumeControls).find(([id, isShown]) => isShown)?.[0];
+    if (!activeId) return;
+    
+    // Get the sound and current volume
+    const sound = sounds.find(s => s.id === activeId);
+    if (!sound) return;
+    
+    const currentVolume = volumes[activeId] || 0.7;
+    
+    // Handle keyboard events
+    const handleKeyDown = (e) => {
+      // Arrow up: Increase volume
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const newVolume = Math.min(1, currentVolume + 0.05);
+        handleVolumeChange(sound, newVolume);
+      }
+      
+      // Arrow down: Decrease volume
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const newVolume = Math.max(0, currentVolume - 0.05);
+        handleVolumeChange(sound, newVolume);
+      }
+      
+      // Escape: Close volume controls
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowVolumeControls({});
+      }
+    };
+    
+    // Add event listener
+    window.addEventListener('keydown', handleKeyDown);
+    
+    // Clean up
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showVolumeControls, volumes, sounds, handleVolumeChange]);
+  
+  // Handle drag end (when user finishes dragging a sound)
+  const handleDragEnd = async (result) => {
+    // If dropped outside a droppable area
+    if (!result.destination) return;
+    
+    const { source, destination, draggableId } = result;
+    
+    // If dropped in the same position
+    if (source.index === destination.index) return;
+    
+    // Find the sound that was dragged
+    const draggedSound = sounds.find(sound => sound.id === draggableId);
+    if (!draggedSound) return;
+    
+    try {
+      // Create a new array with the updated order
+      const updatedSounds = Array.from(filteredSounds);
+      
+      // Remove the dragged item from its original position
+      const [removed] = updatedSounds.splice(source.index, 1);
+      
+      // Insert it at the new position
+      updatedSounds.splice(destination.index, 0, removed);
+      
+      // If moved to a different group (category)
+      if (result.destination.droppableId !== result.source.droppableId) {
+        // Update the sound with the new group ID
+        const newGroupId = result.destination.droppableId;
+        
+        // Save to database with updated group ID
+        const updatedSound = {
+          ...draggedSound,
+          groupId: newGroupId === 'all' ? '' : newGroupId
+        };
+        
+        // Update database
+        await saveSound(updatedSound);
+        
+        // Update local state
+        setSounds(prevSounds => 
+          prevSounds.map(s => 
+            s.id === draggedSound.id ? updatedSound : s
+          )
+        );
+      }
+      
+      // Set drag mode back to false
+      setDragMode(false);
+    } catch (err) {
+      console.error('Error saving dragged sound:', err);
+      setError('Failed to update sound position');
+    }
+  };
+  
+  // Toggle drag mode
+  const toggleDragMode = () => {
+    setDragMode(!dragMode);
+  };
+  
+  // Update tooltip implementations to avoid MUI warnings
+  const renderSoundButton = (sound, index) => {
+    const isPlaying = playing[sound.id];
+    const isLooping = looping[sound.id];
+    const duration = sound.duration || 0;
+    const position = audioPositions[sound.id] || 0;
+    const progress = calculateProgress(position);
+    const showControls = showVolumeControls[sound.id];
+    
+    const soundContent = (
+      <Paper 
+        elevation={3}
+        data-sound-item
+        data-sound-id={sound.id}
+        className="sound-item"
+        sx={{
+          p: 2,
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          position: 'relative',
+          overflow: 'hidden',
+          backgroundImage: `linear-gradient(rgba(255,255,255,0.8), rgba(255,255,255,0.8)), url("https://www.transparenttextures.com/patterns/parchment.png")`,
+          borderRadius: 4,
+          boxShadow: isPlaying ? '0 0 15px rgba(139, 90, 43, 0.7)' : undefined,
+          '&:hover': {
+            transform: dragMode ? 'none' : 'translateY(-2px)',
+            boxShadow: '0 8px 20px rgba(0,0,0,0.2)',
+          },
+          cursor: dragMode ? 'move' : 'default'
+        }}
+      >
+        {/* Drag handle only shown in drag mode */}
+        {dragMode && (
+          <Box sx={{ 
+            position: 'absolute',
+            top: 5,
+            right: 5,
+            color: 'rgba(0,0,0,0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10,
+          }}>
+            <DragIndicatorIcon />
+          </Box>
+        )}
+        
+        {/* Sound progress bar */}
+        {isPlaying && duration > 0 && (
+          <LinearProgress 
+            variant="determinate" 
+            value={progress} 
+            sx={{ 
+              position: 'absolute', 
+              top: 0, 
+              left: 0, 
+              right: 0, 
+              height: 5,
+              borderRadius: '5px 5px 0 0',
+              '& .MuiLinearProgress-bar': {
+                bgcolor: sound.color || theme.palette.primary.main,
+              }
+            }} 
+          />
+        )}
+        
+        {/* Sound info & controls */}
+        <Box display="flex" flexDirection="column" alignItems="center" flexGrow={1}>
+          <Typography 
+            variant="h6" 
+            align="center" 
+            gutterBottom 
+            sx={{ 
+              wordBreak: 'break-word',
+              fontFamily: '"Cinzel", serif',
+              color: sound.color || theme.palette.primary.main,
+              mt: 1
+            }}
+          >
+            <span style={{ marginRight: 8 }}>{sound.emoji || '🔊'}</span>
+            {sound.name}
+          </Typography>
+          
+          <Box sx={{ display: 'flex', alignItems: 'center', mt: 'auto', mb: 1 }}>
+            {/* Only show controls if not in drag mode */}
+            {!dragMode ? (
+              <>
+                {/* Play/Pause Button with improved tooltip */}
+                <Tooltip title={isPlaying ? "Pause" : "Play"}>
+                  <IconButton 
+                    onClick={() => handlePlayPause(sound)}
+                    color={isPlaying ? "secondary" : "primary"}
+                    size="large"
+                    aria-label={isPlaying ? "Pause" : "Play"}
+                  >
+                    {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
+                  </IconButton>
+                </Tooltip>
+                
+                {/* Loop Button with improved tooltip */}
+                <Tooltip title={isLooping ? "Looping On" : "Loop Sound"}>
+                  <IconButton 
+                    onClick={() => handleLoopToggle(sound)}
+                    color={isLooping ? "secondary" : "default"}
+                    size="large"
+                    aria-label={isLooping ? "Looping On" : "Loop Sound"}
+                  >
+                    <LoopIcon />
+                  </IconButton>
+                </Tooltip>
+                
+                {/* Volume Button with improved tooltip */}
+                <Tooltip title="Adjust Volume">
+                  <IconButton 
+                    onClick={(e) => toggleVolumeControls(sound.id, e)}
+                    color={showControls ? "secondary" : "default"}
+                    size="large"
+                    aria-label="Adjust Volume"
+                  >
+                    {getVolumeIcon(sound.volume || 0.7)}
+                  </IconButton>
+                </Tooltip>
+                
+                {/* Delete Button with improved tooltip */}
+                <Tooltip title="Delete Sound">
+                  <IconButton 
+                    onClick={() => handleDeleteSound(sound.id)}
+                    color="error"
+                    size="small"
+                    aria-label="Delete Sound"
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </Tooltip>
+              </>
+            ) : (
+              // Show category in drag mode
+              <Chip 
+                label={sound.groupId ? allCategories.find(c => c.id === sound.groupId)?.name || 'Unknown' : 'Uncategorized'}
+                size="small"
+                color="primary" 
+                variant="outlined"
+                sx={{ my: 1 }}
+              />
+            )}
+          </Box>
+          
+          {/* Volume control - simplified version to avoid ClickAwayListener issues */}
+          {showControls && !dragMode && (
+            <Box 
+              onClick={(e) => e.stopPropagation()} 
+              sx={{ 
+                width: '90%',
+                bgcolor: 'rgba(0,0,0,0.1)',
+                borderRadius: 2,
+                p: 1,
+                mb: 1,
+                position: 'relative',
+                zIndex: 10
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleVolumeChange(sound, 0)}
+                  sx={{ p: 0.5 }}
+                >
+                  <VolumeOffIcon fontSize="small" />
+                </IconButton>
+                
+                <Slider
+                  size="small"
+                  value={sound.volume * 100}
+                  onChange={(e, newValue) => handleVolumeChange(sound, newValue / 100)}
+                  aria-labelledby="volume-slider"
+                  valueLabelDisplay="auto"
+                  valueLabelFormat={value => `${Math.round(value)}%`}
+                  sx={{ 
+                    mx: 1,
+                    color: sound.color || theme.palette.primary.main,
+                    '& .MuiSlider-thumb': {
+                      width: 14, 
+                      height: 14
+                    }
+                  }}
+                />
+                
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleVolumeChange(sound, 1)}
+                  sx={{ p: 0.5 }}
+                >
+                  <VolumeUpIcon fontSize="small" />
+                </IconButton>
+              </Box>
+              
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
+                <Button 
+                  size="small" 
+                  onClick={() => setShowVolumeControls(prev => {
+                    const newControls = {...prev};
+                    delete newControls[sound.id];
+                    return newControls;
+                  })}
+                  sx={{ 
+                    minWidth: 'unset', 
+                    p: 0.5, 
+                    fontSize: '0.7rem',
+                    color: 'rgba(0,0,0,0.6)'
+                  }}
+                >
+                  Close
+                </Button>
+              </Box>
+            </Box>
+          )}
+          
+          {/* Show duration if available and not in drag mode */}
+          {duration > 0 && !dragMode && (
+            <Typography 
+              variant="caption" 
+              color="text.secondary" 
+              sx={{ mt: 1 }}
+            >
+              {isPlaying ? `${formatTime(position)} / ${formatTime(duration)}` : formatTime(duration)}
+            </Typography>
+          )}
+        </Box>
+      </Paper>
+    );
+    
+    // If in drag mode, wrap with Draggable
+    if (dragMode) {
+      return (
+        <Draggable 
+          key={sound.id} 
+          draggableId={sound.id} 
+          index={index}
+        >
+          {(provided, snapshot) => (
+            <Grid
+              item xs={12} sm={6} md={4} lg={3}
+              ref={provided.innerRef}
+              {...provided.draggableProps}
+              {...provided.dragHandleProps}
+              sx={{
+                opacity: snapshot.isDragging ? 0.8 : 1,
+              }}
+            >
+              {soundContent}
+            </Grid>
+          )}
+        </Draggable>
+      );
+    }
+    
+    // Regular rendering when not in drag mode
+    return (
+      <Grid item xs={12} sm={6} md={4} lg={3} key={sound.id}>
+        {soundContent}
+      </Grid>
+    );
+  };
+  
+  // Apply master volume to all playing sounds
+  useEffect(() => {
+    // Apply master volume to all currently playing audio elements
+    Object.entries(audioMap).forEach(([id, audio]) => {
+      if (audio) {
+        // Calculate effective volume (soundVolume * masterVolume)
+        const soundVolume = sounds.find(s => s.id === id)?.volume || 0.7;
+        const effectiveVolume = soundVolume * masterVolume;
+        
+        // Apply clamped volume to audio
+        audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+      }
+    });
+  }, [masterVolume, audioMap, sounds]);
+  
+  // Toggle the mixer drawer
+  const toggleMixer = () => {
+    setDrawerOpen(!drawerOpen);
+    
+    // If opening mixer, ensure we close any volume popups
+    if (!drawerOpen) {
+      setShowVolumeControls({});
+    }
+  };
+  
+  // Get the count of currently playing sounds
+  const playingSoundsCount = Object.values(playing).filter(Boolean).length;
+  
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box sx={{
         minHeight: '100vh',
-        // Use a solid color background instead of an image to avoid path issues
-        background: '#f2efe6',
+        background: 'linear-gradient(165deg, #f2efe6 0%, #e0d8c0 100%)',
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundAttachment: 'fixed',
@@ -729,30 +1266,71 @@ export default function App() {
             position: 'relative',
           }}>
             {/* Header */}
-            <AppBar position="static" color="primary" elevation={0}>
-              <Toolbar sx={{ justifyContent: 'space-between', px: 3, py: 2 }}>
-                <Typography variant="h1" sx={{ fontSize: { xs: '1.8rem', sm: '2.5rem' }, letterSpacing: 2 }}>
+            <AppBar position="static" color="primary" elevation={0} 
+              sx={{
+                background: 'linear-gradient(135deg, #8b5a2b 0%, #a67c52 100%)',
+                borderTopLeftRadius: 12,
+                borderTopRightRadius: 12,
+              }}
+            >
+              <Toolbar sx={{ justifyContent: 'space-between', px: 3, py: { xs: 1.5, sm: 2 } }}>
+                <Typography 
+                  variant="h1" 
+                  sx={{ 
+                    fontSize: { xs: '1.8rem', sm: '2.5rem' }, 
+                    letterSpacing: 2,
+                    textShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  }}
+                >
                   Fantasy Soundboard
                 </Typography>
                 <Box>
-                  <IconButton 
-                    color="inherit" 
-                    onClick={() => setConfirmReset(true)} 
-                    title="Reset Soundboard"
-                    aria-label="Reset Soundboard"
-                  >
-                    <RefreshIcon />
-                  </IconButton>
+                  {/* Toggle drag mode button */}
+                  {sounds.length > 0 && (
+                    <Tooltip title={dragMode ? "Exit Organize Mode" : "Organize Sounds"}>
+                      <IconButton 
+                        color={dragMode ? "secondary" : "inherit"}
+                        onClick={toggleDragMode}
+                        sx={{ 
+                          mr: 1,
+                          backgroundColor: dragMode ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)',
+                          '&:hover': { 
+                            backgroundColor: dragMode ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.2)',
+                          }
+                        }}
+                        aria-label={dragMode ? "Exit Organize Mode" : "Organize Sounds"}
+                      >
+                        <DragIndicatorIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                
+                  <Tooltip title="Reset Soundboard">
+                    <IconButton 
+                      color="inherit" 
+                      onClick={() => setConfirmReset(true)} 
+                      sx={{ 
+                        backgroundColor: 'rgba(255,255,255,0.1)',
+                        '&:hover': { 
+                          backgroundColor: 'rgba(255,255,255,0.2)',
+                        }
+                      }}
+                      aria-label="Reset Soundboard"
+                    >
+                      <RefreshIcon />
+                    </IconButton>
+                  </Tooltip>
                 </Box>
               </Toolbar>
               
               {/* Category Tabs */}
-              <Box sx={{ px: 2 }}>
+              <Box sx={{ px: 2, mb: 1.5 }}>
                 <Tabs
                   value={currentTab}
                   onChange={handleCategoryChange}
                   variant="scrollable"
                   scrollButtons="auto"
+                  aria-label="Category tabs"
                   sx={{
                     mb: 1,
                     '& .MuiTab-root': {
@@ -760,14 +1338,24 @@ export default function App() {
                       opacity: 0.7,
                       color: 'primary.main',
                       mx: 0.5,
+                      fontWeight: 'bold',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
                       '&.Mui-selected': {
-                        bgcolor: 'primary.main',
-                        color: 'white',
+                        bgcolor: '#fff',
+                        color: 'primary.main',
                         opacity: 1,
                         fontWeight: 'bold',
                       },
                       '&:hover': {
                         opacity: 1,
+                        transform: 'translateY(-2px)',
+                        boxShadow: '0 4px 8px rgba(0,0,0,0.15)',
+                      },
+                    },
+                    '& .MuiTabs-scrollButtons': {
+                      color: 'white',
+                      '&.Mui-disabled': {
+                        opacity: 0.3,
                       },
                     },
                   }}
@@ -787,8 +1375,33 @@ export default function App() {
                 </Box>
               ) : (
                 <>
+                  {dragMode && (
+                    <Box 
+                      sx={{ 
+                        p: 2, 
+                        mb: 3, 
+                        bgcolor: 'rgba(227, 213, 184, 0.5)', 
+                        borderRadius: 2,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 2 
+                      }}
+                    >
+                      <DragIndicatorIcon color="primary" />
+                      <Typography>
+                        <strong>Organize Mode:</strong> Drag sounds to reorder or drop them on tabs to change category
+                      </Typography>
+                    </Box>
+                  )}
+                  
                   {filteredSounds.length === 0 ? (
-                    <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'rgba(255,255,255,0.7)' }}>
+                    <Paper sx={{ 
+                      p: 4, 
+                      textAlign: 'center', 
+                      bgcolor: 'rgba(255,255,255,0.7)',
+                      border: '1px solid rgba(139, 90, 43, 0.2)', 
+                      boxShadow: '0 4px 20px rgba(139, 90, 43, 0.1)'
+                    }}>
                       <Typography variant="h6" color="text.secondary">
                         No sounds in this category
                       </Typography>
@@ -797,194 +1410,362 @@ export default function App() {
                       </Typography>
                     </Paper>
                   ) : (
-                    <Grid container spacing={3} justifyContent="center">
-                      {filteredSounds.map((sound) => (
-                        <Grid item key={sound.id} xs={6} sm={4} md={3} lg={2}>
-                          <Paper
-                            sx={{
-                              width: '100%',
-                              aspectRatio: '1/1',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              borderRadius: '50%',
-                              position: 'relative',
-                              bgcolor: sound.color || theme.palette.primary.main,
-                              color: 'white',
-                              cursor: 'pointer',
-                              transition: 'transform 0.2s, box-shadow 0.2s',
-                              border: '3px solid rgba(255,255,255,0.5)',
-                              '&:hover': {
-                                transform: 'translateY(-5px)',
-                                boxShadow: 6,
-                                '& .sound-controls': {
-                                  opacity: 1,
-                                },
-                              },
-                            }}
-                            onClick={() => handlePlayPause(sound)}
+                    <DragDropContext onDragEnd={handleDragEnd}>
+                      <Droppable 
+                        droppableId={allCategories[currentTab].id} 
+                        type="SOUND"
+                        direction="horizontal"
+                      >
+                        {(provided) => (
+                          <Grid 
+                            container 
+                            spacing={3} 
+                            justifyContent="center"
+                            ref={provided.innerRef}
+                            {...provided.droppableProps}
                           >
-                            {/* Sound Icon */}
-                            <Box sx={{ fontSize: '2.5rem', mb: 1 }}>
-                              {sound.icon || '🔊'}
-                            </Box>
-                            
-                            {/* Sound Name */}
-                            <Typography
-                              variant="subtitle1"
-                              align="center"
-                              sx={{
-                                fontWeight: 'bold',
-                                px: 2,
-                                textShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                                wordBreak: 'break-word',
-                              }}
-                            >
-                              {sound.name}
-                            </Typography>
-                            
-                            {/* Sound Duration and Progress */}
-                            <Box sx={{ width: '80%', mt: 1 }}>
-                              {playing[sound.id] && (
-                                <LinearProgress 
-                                  variant="determinate" 
-                                  value={calculateProgress(audioPositions[sound.id])} 
-                                  sx={{ 
-                                    height: 4, 
-                                    borderRadius: 2,
-                                    bgcolor: 'rgba(255,255,255,0.2)',
-                                    '& .MuiLinearProgress-bar': {
-                                      bgcolor: 'rgba(255,255,255,0.8)'
-                                    }
-                                  }}
-                                />
-                              )}
-                              <Typography variant="caption" sx={{ 
-                                opacity: 0.9, 
-                                display: 'flex',
-                                justifyContent: 'center',
-                                mt: 0.5
-                              }}>
-                                {playing[sound.id] ? (
-                                  <>
-                                    {formatTime(audioPositions[sound.id]?.current)} / 
-                                    {formatTime(audioPositions[sound.id]?.duration)}
-                                  </>
-                                ) : (
-                                  formatTime(sound.duration)
-                                )}
-                              </Typography>
-                            </Box>
-                            
-                            {/* Sound Controls */}
-                            <Box
-                              className="sound-controls"
-                              sx={{
-                                position: 'absolute',
-                                top: 5,
-                                right: 5,
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 0.5,
-                                opacity: 0,
-                                transition: 'opacity 0.2s',
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <IconButton
-                                size="small"
-                                sx={{
-                                  bgcolor: 'rgba(255,255,255,0.8)',
-                                  '&:hover': { bgcolor: 'rgba(255,255,255,1)' },
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handlePlayPause(sound);
-                                }}
-                                color={playing[sound.id] ? 'primary' : 'default'}
-                              >
-                                {playing[sound.id] ? <PauseIcon /> : <PlayArrowIcon />}
-                              </IconButton>
-                              
-                              <IconButton
-                                size="small"
-                                sx={{
-                                  bgcolor: 'rgba(255,255,255,0.8)',
-                                  '&:hover': { bgcolor: 'rgba(255,255,255,1)' },
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleLoopToggle(sound);
-                                }}
-                                color={looping[sound.id] ? 'secondary' : 'default'}
-                              >
-                                <LoopIcon />
-                              </IconButton>
-                              
-                              <IconButton
-                                size="small"
-                                sx={{
-                                  bgcolor: 'rgba(255,255,255,0.8)',
-                                  '&:hover': { bgcolor: 'rgba(255,255,255,1)' },
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteSound(sound.id);
-                                }}
-                                color="error"
-                              >
-                                <DeleteIcon />
-                              </IconButton>
-                            </Box>
-                            
-                            {/* Loop Indicator */}
-                            {looping[sound.id] && (
-                              <Box
-                                sx={{
-                                  position: 'absolute',
-                                  bottom: 10,
-                                  right: 10,
-                                  fontSize: '1.2rem',
-                                  textShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                                }}
-                              >
-                                ∞
-                              </Box>
-                            )}
-                          </Paper>
-                        </Grid>
-                      ))}
-                    </Grid>
+                            {filteredSounds.map((sound, index) => renderSoundButton(sound, index))}
+                            {provided.placeholder}
+                          </Grid>
+                        )}
+                      </Droppable>
+                    </DragDropContext>
                   )}
                 </>
               )}
             </Container>
           </Paper>
           
+          {/* Volume Mixer FAB - Only show when sounds are playing and not in drag mode */}
+          {playingSoundsCount > 0 && !dragMode && (
+            <Tooltip title="Volume Mixer">
+              <Fab
+                color="secondary"
+                onClick={toggleMixer}
+                sx={{ 
+                  position: 'fixed',
+                  bottom: 16,
+                  left: 16,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  '&:hover': {
+                    transform: 'translateY(-3px)',
+                    boxShadow: '0 6px 16px rgba(0,0,0,0.2)',
+                  },
+                  transition: 'all 0.3s ease'
+                }}
+                aria-label="Volume Mixer"
+              >
+                <Badge
+                  badgeContent={playingSoundsCount}
+                  color="primary"
+                >
+                  <TuneIcon />
+                </Badge>
+              </Fab>
+            </Tooltip>
+          )}
+          
+          {/* Exit drag mode FAB - Only show when in drag mode */}
+          {dragMode && (
+            <Tooltip title="Exit Organize Mode">
+              <Fab
+                color="primary"
+                onClick={toggleDragMode}
+                sx={{ 
+                  position: 'fixed',
+                  bottom: 16,
+                  left: 16,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  '&:hover': {
+                    transform: 'translateY(-3px)',
+                    boxShadow: '0 6px 16px rgba(0,0,0,0.2)',
+                  },
+                  transition: 'all 0.3s ease'
+                }}
+                aria-label="Exit Organize Mode"
+              >
+                <DragIndicatorIcon />
+              </Fab>
+            </Tooltip>
+          )}
+          
           {/* Action Buttons */}
           <Box sx={{ position: 'fixed', bottom: 16, right: 16, display: 'flex', gap: 2 }}>
-            <Fab
-              color="secondary"
-              aria-label="add group"
-              onClick={handleAddGroupOpen}
-              sx={{ boxShadow: 3 }}
-            >
-              <CategoryIcon />
-            </Fab>
-            <Fab
-              color="primary"
-              aria-label="add sound"
-              onClick={handleAddSoundOpen}
-              sx={{ boxShadow: 3 }}
-            >
-              <AddIcon />
-            </Fab>
+            {/* Hide action buttons in drag mode */}
+            {!dragMode && (
+              <>
+                <Tooltip title="Add Category">
+                  <Fab
+                    color="secondary"
+                    onClick={handleAddGroupOpen}
+                    sx={{ 
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      '&:hover': {
+                        transform: 'translateY(-3px)',
+                        boxShadow: '0 6px 16px rgba(0,0,0,0.2)',
+                      },
+                      transition: 'all 0.3s ease'
+                    }}
+                    aria-label="Add Category"
+                  >
+                    <CategoryIcon />
+                  </Fab>
+                </Tooltip>
+                <Tooltip title="Add Sound">
+                  <Fab
+                    color="primary"
+                    onClick={handleAddSoundOpen}
+                    sx={{ 
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      '&:hover': {
+                        transform: 'translateY(-3px)',
+                        boxShadow: '0 6px 16px rgba(0,0,0,0.2)',
+                      },
+                      transition: 'all 0.3s ease'
+                    }}
+                    aria-label="Add Sound"
+                  >
+                    <AddIcon />
+                  </Fab>
+                </Tooltip>
+              </>
+            )}
           </Box>
           
+          {/* Volume Mixer Drawer */}
+          <Drawer
+            anchor="left"
+            open={drawerOpen}
+            onClose={() => setDrawerOpen(false)}
+            PaperProps={{
+              sx: {
+                width: { xs: '100%', sm: 320 },
+                maxWidth: '100%',
+                borderTopRightRadius: 16,
+                borderBottomRightRadius: 16,
+                boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
+                backgroundImage: 'linear-gradient(to bottom, #f8f4e5, #e0d8c0)',
+              }
+            }}
+          >
+            <Box sx={{ p: 2 }}>
+              <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <TuneIcon /> Volume Mixer
+              </Typography>
+              
+              {/* Master volume control */}
+              <Paper sx={{ p: 2, mb: 2, bgcolor: 'rgba(255,255,255,0.7)' }}>
+                <Typography variant="subtitle2" fontWeight="bold">
+                  Master Volume
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
+                  <IconButton 
+                    onClick={() => {
+                      const newVolume = 0;
+                      setMasterVolume(newVolume);
+                      
+                      // Apply to all currently playing sounds immediately
+                      Object.entries(audioMap).forEach(([id, audio]) => {
+                        if (audio) {
+                          const sound = sounds.find(s => s.id === id);
+                          if (sound) {
+                            const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
+                            audio.volume = 0; // Set to zero
+                          }
+                        }
+                      });
+                    }}
+                    size="small"
+                  >
+                    <VolumeOffIcon fontSize="small" />
+                  </IconButton>
+                  
+                  <Slider
+                    value={masterVolume * 100}
+                    onChange={(e, newValue) => {
+                      // Convert percentage to decimal
+                      const newVolume = newValue / 100;
+                      
+                      // Update state
+                      setMasterVolume(newVolume);
+                      
+                      // Apply to all currently playing sounds immediately
+                      Object.entries(audioMap).forEach(([id, audio]) => {
+                        if (audio) {
+                          const sound = sounds.find(s => s.id === id);
+                          if (sound) {
+                            const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
+                            audio.volume = Math.max(0, Math.min(1, baseVolume * newVolume));
+                          }
+                        }
+                      });
+                    }}
+                    aria-labelledby="master-volume-slider"
+                    valueLabelDisplay="auto"
+                    valueLabelFormat={value => `${Math.round(value)}%`}
+                    sx={{ mx: 1 }}
+                  />
+                  
+                  <IconButton 
+                    onClick={() => {
+                      const newVolume = 1.0;
+                      setMasterVolume(newVolume);
+                      
+                      // Apply to all currently playing sounds immediately
+                      Object.entries(audioMap).forEach(([id, audio]) => {
+                        if (audio) {
+                          const sound = sounds.find(s => s.id === id);
+                          if (sound) {
+                            const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
+                            audio.volume = baseVolume; // Set to base volume (1.0 master means use base volume)
+                          }
+                        }
+                      });
+                    }}
+                    size="small"
+                  >
+                    <VolumeUpIcon fontSize="small" />
+                  </IconButton>
+                  
+                  <Box sx={{ minWidth: 35, textAlign: 'right' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      {Math.round(masterVolume * 100)}%
+                    </Typography>
+                  </Box>
+                </Box>
+              </Paper>
+
+              {/* Currently playing sounds */}
+              <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>
+                Currently Playing
+              </Typography>
+              
+              {Object.entries(playing).filter(([id, isPlaying]) => isPlaying).length === 0 ? (
+                <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'rgba(255,255,255,0.5)' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    No sounds playing
+                  </Typography>
+                </Paper>
+              ) : (
+                <List sx={{ 
+                  bgcolor: 'rgba(255,255,255,0.5)', 
+                  borderRadius: 2,
+                  maxHeight: '50vh',
+                  overflow: 'auto'
+                }}>
+                  {Object.entries(playing)
+                    .filter(([id, isPlaying]) => isPlaying)
+                    .map(([id]) => {
+                      const sound = sounds.find(s => s.id === id);
+                      if (!sound) return null;
+                      
+                      const audio = audioMap[id];
+                      const position = audioPositions[id] || 0;
+                      const duration = sound.duration || 0;
+                      const soundVolume = sound.volume !== undefined ? sound.volume : 0.7;
+                      
+                      return (
+                        <ListItem key={id} sx={{ 
+                          borderBottom: '1px solid rgba(0,0,0,0.05)',
+                          px: 2,
+                          py: 1,
+                        }}>
+                          <Box sx={{ width: '100%' }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                              <span style={{ marginRight: 8 }}>{sound.emoji || '🔊'}</span>
+                              <Typography variant="body2" noWrap sx={{ flexGrow: 1, fontWeight: 'bold' }}>
+                                {sound.name}
+                              </Typography>
+                              <IconButton 
+                                size="small" 
+                                color="error"
+                                onClick={() => handlePlayPause(sound)}
+                              >
+                                <StopIcon fontSize="small" />
+                              </IconButton>
+                            </Box>
+                            
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Box sx={{ width: '100%' }}>
+                                <Slider
+                                  size="small"
+                                  value={soundVolume * 100}
+                                  onChange={(e, newValue) => {
+                                    const newVol = newValue / 100;
+                                    handleVolumeChange(sound, newVol);
+                                  }}
+                                  aria-label={`${sound.name} volume`}
+                                  sx={{ 
+                                    color: sound.color || theme.palette.primary.main 
+                                  }}
+                                />
+                                <Box sx={{ 
+                                  display: 'flex', 
+                                  justifyContent: 'space-between',
+                                  fontSize: '0.75rem',
+                                  color: 'text.secondary'
+                                }}>
+                                  <span>{Math.round(soundVolume * 100)}%</span>
+                                  {duration > 0 && (
+                                    <span>{formatTime(position)} / {formatTime(duration)}</span>
+                                  )}
+                                </Box>
+                              </Box>
+                            </Box>
+                            
+                            {/* Progress bar */}
+                            {duration > 0 && (
+                              <LinearProgress 
+                                variant="determinate" 
+                                value={(position / duration) * 100} 
+                                sx={{ 
+                                  height: 3, 
+                                  mt: 0.5, 
+                                  borderRadius: 5,
+                                  bgcolor: 'rgba(0,0,0,0.05)',
+                                  '& .MuiLinearProgress-bar': {
+                                    bgcolor: sound.color || theme.palette.primary.main,
+                                  }
+                                }}
+                              />
+                            )}
+                          </Box>
+                        </ListItem>
+                      );
+                    })}
+                </List>
+              )}
+              
+              <Box sx={{ mt: 2, display: 'flex', justifyContent: 'space-between' }}>
+                <Button 
+                  variant="outlined" 
+                  color="error"
+                  startIcon={<StopIcon />}
+                  onClick={stopAllSounds}
+                  sx={{ width: '100%' }}
+                >
+                  Stop All Sounds
+                </Button>
+              </Box>
+            </Box>
+          </Drawer>
+          
           {/* Add Sound Dialog */}
-          <Dialog open={addSoundOpen} onClose={handleAddSoundClose} maxWidth="sm" fullWidth>
-            <DialogTitle sx={{ bgcolor: 'primary.main', color: 'white' }}>Add New Sound</DialogTitle>
+          <Dialog open={addSoundOpen} onClose={handleAddSoundClose} maxWidth="sm" fullWidth
+            PaperProps={{
+              sx: {
+                borderRadius: 3,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+              }
+            }}
+          >
+            <DialogTitle sx={{ 
+              bgcolor: 'primary.main', 
+              color: 'white',
+              background: 'linear-gradient(135deg, #8b5a2b 0%, #a67c52 100%)',
+            }}>
+              Add New Sound
+            </DialogTitle>
             <DialogContent sx={{ pt: 2, pb: 3, px: 3, mt: 2 }}>
               <TextField
                 label="Sound Name"
@@ -1017,15 +1798,74 @@ export default function App() {
               
               <Grid container spacing={2}>
                 <Grid item xs={6}>
-                  <TextField
-                    label="Emoji Icon"
-                    fullWidth
-                    margin="normal"
-                    value={newSound.emoji}
-                    onChange={(e) => setNewSound({ ...newSound, emoji: e.target.value })}
-                    inputProps={{ maxLength: 2 }}
-                    placeholder="🔊"
-                  />
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Icon
+                    </Typography>
+                    <Paper
+                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        height: '56px',
+                        width: '56px',
+                        cursor: 'pointer',
+                        fontSize: '2rem',
+                        border: '1px solid #ddd',
+                        '&:hover': {
+                          backgroundColor: '#f8f8f8'
+                        }
+                      }}
+                    >
+                      {newSound.emoji}
+                    </Paper>
+                  </Box>
+                  
+                  {showEmojiPicker && (
+                    <ClickAwayListener onClickAway={() => setShowEmojiPicker(false)}>
+                      <Paper 
+                        elevation={3}
+                        sx={{ 
+                          p: 1, 
+                          maxHeight: '200px',
+                          overflowY: 'auto',
+                          mt: 1,
+                          position: 'absolute',
+                          zIndex: 1300,
+                          width: '260px'
+                        }}
+                      >
+                        <Grid container spacing={1}>
+                          {emojiOptions.map((emoji, index) => (
+                            <Grid item key={index} xs={2}>
+                              <Box 
+                                sx={{ 
+                                  p: 1,
+                                  display: 'flex',
+                                  justifyContent: 'center',
+                                  alignItems: 'center',
+                                  cursor: 'pointer',
+                                  fontSize: '1.5rem',
+                                  borderRadius: '4px',
+                                  '&:hover': {
+                                    backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                                  },
+                                  backgroundColor: newSound.emoji === emoji ? 'rgba(0, 0, 0, 0.08)' : 'transparent',
+                                }}
+                                onClick={() => {
+                                  setNewSound({ ...newSound, emoji });
+                                  setShowEmojiPicker(false);
+                                }}
+                              >
+                                {emoji}
+                              </Box>
+                            </Grid>
+                          ))}
+                        </Grid>
+                      </Paper>
+                    </ClickAwayListener>
+                  )}
                 </Grid>
                 <Grid item xs={6}>
                   <TextField
@@ -1038,6 +1878,31 @@ export default function App() {
                   />
                 </Grid>
               </Grid>
+              
+              {/* Add volume slider */}
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Default Volume
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <VolumeDownIcon color="action" />
+                  <Slider
+                    value={newSound.volume}
+                    onChange={(e, newValue) => setNewSound({ ...newSound, volume: newValue })}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    sx={{ 
+                      color: '#8b5a2b',
+                      '& .MuiSlider-thumb': { 
+                        width: 16, 
+                        height: 16 
+                      }
+                    }}
+                  />
+                  <VolumeUpIcon color="action" />
+                </Box>
+              </Box>
               
               <FormControl fullWidth margin="normal">
                 <InputLabel id="category-label">Category</InputLabel>
@@ -1072,8 +1937,22 @@ export default function App() {
           </Dialog>
           
           {/* Add Group Dialog */}
-          <Dialog open={addGroupOpen} onClose={handleAddGroupClose} maxWidth="sm" fullWidth>
-            <DialogTitle sx={{ bgcolor: 'primary.main', color: 'white' }}>Add New Category</DialogTitle>
+          <Dialog open={addGroupOpen} onClose={handleAddGroupClose} maxWidth="sm" fullWidth
+            PaperProps={{
+              sx: {
+                borderRadius: 3,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+              }
+            }}
+          >
+            <DialogTitle sx={{ 
+              bgcolor: 'secondary.main', 
+              color: 'primary.main',
+              background: 'linear-gradient(135deg, #e3d5b8 0%, #f0e9d9 100%)',
+              fontWeight: 'bold'
+            }}>
+              Add New Category
+            </DialogTitle>
             <DialogContent sx={{ pt: 2, pb: 3, px: 3, mt: 2 }}>
               <TextField
                 label="Category Name"
@@ -1083,15 +1962,37 @@ export default function App() {
                 onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })}
                 required
                 variant="outlined"
+                autoFocus
+                InputProps={{
+                  startAdornment: (
+                    <Box sx={{ mr: 1, color: 'primary.main', opacity: 0.7 }}>
+                      <CategoryIcon />
+                    </Box>
+                  )
+                }}
               />
             </DialogContent>
             <DialogActions sx={{ px: 3, pb: 2 }}>
-              <Button onClick={handleAddGroupClose}>Cancel</Button>
+              <Button 
+                onClick={handleAddGroupClose}
+                variant="outlined"
+                sx={{
+                  borderRadius: '20px',
+                  px: 2,
+                }}
+              >
+                Cancel
+              </Button>
               <Button 
                 onClick={handleAddGroup} 
                 variant="contained" 
                 color="primary"
                 disabled={!newGroup.name}
+                sx={{
+                  borderRadius: '20px',
+                  px: 3,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                }}
               >
                 Add Category
               </Button>
@@ -1099,16 +2000,44 @@ export default function App() {
           </Dialog>
           
           {/* Reset Confirmation Dialog */}
-          <Dialog open={confirmReset} onClose={() => setConfirmReset(false)}>
-            <DialogTitle>Reset Soundboard?</DialogTitle>
+          <Dialog 
+            open={confirmReset} 
+            onClose={() => setConfirmReset(false)}
+            PaperProps={{
+              sx: {
+                borderRadius: 3,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+              }
+            }}
+          >
+            <DialogTitle sx={{ fontWeight: 'bold' }}>
+              Reset Soundboard?
+            </DialogTitle>
             <DialogContent>
               <Typography>
                 This will delete all your sounds and categories. This action cannot be undone.
               </Typography>
             </DialogContent>
-            <DialogActions>
-              <Button onClick={() => setConfirmReset(false)}>Cancel</Button>
-              <Button onClick={handleResetDatabase} color="error" variant="contained">
+            <DialogActions sx={{ px: 3, pb: 2 }}>
+              <Button 
+                onClick={() => setConfirmReset(false)}
+                variant="outlined"
+                sx={{
+                  borderRadius: '20px',
+                  px: 2,
+                }}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleResetDatabase} 
+                color="error" 
+                variant="contained"
+                sx={{
+                  borderRadius: '20px',
+                  px: 2,
+                }}
+              >
                 Reset Everything
               </Button>
             </DialogActions>
@@ -1117,11 +2046,21 @@ export default function App() {
           {/* Error Snackbar */}
           <Snackbar
             open={!!error}
-            autoHideDuration={6000}
+            autoHideDuration={5000}
             onClose={handleErrorClose}
             anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
           >
-            <Alert onClose={handleErrorClose} severity="error" sx={{ width: '100%' }}>
+            <Alert 
+              onClose={handleErrorClose} 
+              severity="error" 
+              variant="filled"
+              sx={{ 
+                width: '100%',
+                '& .MuiAlert-message': {
+                  fontSize: '0.95rem'
+                }
+              }}
+            >
               {error}
             </Alert>
           </Snackbar>
@@ -1129,4 +2068,14 @@ export default function App() {
       </Box>
     </ThemeProvider>
   );
+}
+
+// Helper function to get the appropriate volume icon based on level
+function getVolumeIcon(volume, fontSize) {
+  const style = fontSize ? { fontSize } : {};
+  
+  if (volume === 0) return <VolumeOffIcon sx={style} />;
+  if (volume < 0.3) return <VolumeMuteIcon sx={style} />;
+  if (volume < 0.7) return <VolumeDownIcon sx={style} />;
+  return <VolumeUpIcon sx={style} />;
 } 

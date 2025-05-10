@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:clean": "npx kill-port 5173 5174 4500-5500 && vite",
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist"
@@ -16,13 +17,17 @@
     "@mui/material": "^5.13.0",
     "idb": "^8.0.3",
     "react": "^18.2.0",
+    "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^22.15.17",
     "@types/react": "^18.2.6",
     "@types/react-dom": "^18.2.4",
     "@vitejs/plugin-react": "^4.0.0",
     "gh-pages": "^5.0.0",
+    "kill-port": "^2.0.1",
     "vite": "^4.3.5"
   }
 }
