@@ -162,10 +162,85 @@ function fileToDataURL(file) {
   });
 }
 
+// iOS specific audio initialization
+function initializeIOSAudio() {
+  return new Promise((resolve, reject) => {
+    try {
+      // Create a silent audio context
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContext();
+      
+      // Create and play a silent buffer to unlock audio
+      const silentBuffer = audioContext.createBuffer(1, 1, 22050);
+      const source = audioContext.createBufferSource();
+      source.buffer = silentBuffer;
+      source.connect(audioContext.destination);
+      
+      // iOS needs both start call and immediate resume
+      if (source.start) {
+        source.start(0);
+      } else {
+        source.noteOn(0);
+      }
+      
+      // Resume the context
+      audioContext.resume().then(() => {
+        console.log('iOS audio initialized successfully');
+        resolve(audioContext);
+      }).catch(err => {
+        console.warn('iOS audio resume failed:', err);
+        reject(err);
+      });
+    } catch (err) {
+      console.error('iOS audio initialization error:', err);
+      reject(err);
+    }
+  });
+}
+
+// Function to decode audio data for iOS
+function decodeAudioDataForIOS(audioContext, dataUrl) {
+  return new Promise((resolve, reject) => {
+    // Extract base64 data from data URL
+    const base64Data = dataUrl.split(',')[1];
+    
+    if (!base64Data) {
+      reject(new Error('Invalid audio data format'));
+      return;
+    }
+    
+    try {
+      // Convert base64 to array buffer
+      const binaryString = window.atob(base64Data);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      const audioData = bytes.buffer;
+      
+      // Decode the audio data
+      audioContext.decodeAudioData(audioData)
+        .then(decodedData => resolve(decodedData))
+        .catch(err => {
+          console.error('Error decoding audio data:', err);
+          reject(err);
+        });
+    } catch (err) {
+      console.error('Error processing audio data:', err);
+      reject(err);
+    }
+  });
+}
+
 const predefinedCategories = ['Ambience', 'Combat', 'Music', 'Voices', 'Special Effects'];
 
-// Check if the device is running iOS
-const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+// More accurate detection for iPad and iOS devices
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1 && !window.MSStream);
+const isiPad = isIOS && (navigator.maxTouchPoints > 1 || /iPad/.test(navigator.userAgent));
 
 // Sound-related emoji collection
 const emojiOptions = [
@@ -509,6 +584,11 @@ export default function App() {
       if (paused[sound.id] && audioMap[sound.id]) {
         const audio = audioMap[sound.id];
         try {
+          // For iOS, ensure audio context is running first
+          if (isIOS && audioContextRef.current) {
+            await audioContextRef.current.resume();
+          }
+          
           // iOS requires user interaction to play audio
           const playPromise = audio.play();
           if (playPromise !== undefined) {
@@ -516,79 +596,82 @@ export default function App() {
               setPlaying(prev => ({ ...prev, [sound.id]: true }));
               setPaused(prev => ({ ...prev, [sound.id]: false }));
             }).catch(err => {
-              console.error('Error resuming audio:', err);
+              console.error('Error resuming audio:', err, err.name, err.message);
+              
+              // Enhanced error handling for iOS
               if (err.name === 'NotAllowedError') {
-                setError('iOS requires user interaction. Please tap on the screen.');
+                setError('iOS requires interaction. Tap on the screen to play audio.');
+                
                 // Create iOS specific unlock function
                 const unlockIOSAudio = async () => {
                   try {
+                    // Try to initialize iOS audio first
+                    if (isIOS) {
+                      await initializeIOSAudio();
+                    }
+                    
                     if (audioContextRef.current) {
                       await audioContextRef.current.resume();
                     }
+                    
+                    // Try playing again after user interaction
                     await audio.play();
                     setPlaying(prev => ({ ...prev, [sound.id]: true }));
                     setPaused(prev => ({ ...prev, [sound.id]: false }));
+                    
+                    // Clear error message
+                    setError(null);
+                    
+                    // Clean up event listener
                     document.removeEventListener('touchend', unlockIOSAudio);
                   } catch (unlockErr) {
                     console.error('Failed to unlock iOS audio:', unlockErr);
+                    setError(`Audio playback error: ${unlockErr.message || 'iOS audio restrictions'}. Try reloading the page.`);
                   }
                 };
+                
+                // Add event listener for iOS touch
                 document.addEventListener('touchend', unlockIOSAudio, { once: true });
+              } else if (err.name === 'AbortError' && isIOS) {
+                setError('iPad audio error. Try pausing other apps playing audio or reload the page.');
               } else {
-                setError(`Error resuming "${sound.name}": ${err.message}`);
+                setError(`Error playing "${sound.name}": ${err.message || 'Unknown error'}`);
               }
             });
           }
         } catch (err) {
           console.error('Error resuming audio:', err);
-          setError(`Error resuming "${sound.name}": ${err.message}`);
+          setError(`Error with "${sound.name}": ${err.message || 'Unknown error'}`);
         }
         return;
       }
       
-      // Initialize AudioContext on demand - iOS compatible approach
-      if (!audioContextRef.current) {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        audioContextRef.current = new AudioContext();
+      // For new sound playback, we need more careful handling on iOS
+      try {
+        // Create a new Audio element with iOS optimizations
+        const audio = new Audio();
         
-        // If suspended (likely on iOS), try to resume
-        if (audioContextRef.current.state === 'suspended') {
+        // Enhanced iOS handling
+        if (isIOS) {
+          // Explicit audio properties for iOS
+          audio.preload = 'auto'; 
+          audio.autoplay = false; // Never autoplay on iOS
+          
           try {
-            // iOS requires a short buffer sound to be played
-            const buffer = audioContextRef.current.createBuffer(1, 1, 22050);
-            const source = audioContextRef.current.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioContextRef.current.destination);
-            if (source.start) {
-              source.start(0);
-            } else {
-              source.noteOn(0);
+            // Make sure audio context is initialized and resumed
+            if (!audioContextRef.current) {
+              audioContextRef.current = await initializeIOSAudio();
+              setAudioContextInitialized(true);
+            } else if (audioContextRef.current.state === 'suspended') {
+              await audioContextRef.current.resume();
             }
-            
-            await audioContextRef.current.resume();
-          } catch (err) {
-            console.warn('Could not resume AudioContext for iOS:', err);
+          } catch (iosErr) {
+            console.warn('iOS audio context setup issue:', iosErr);
+            // Continue with direct Audio API approach
           }
         }
-      }
-      
-      // Create a new Audio element with iOS optimizations
-      const audio = new Audio();
-      
-      // iOS Safari requires preload metadata for better playback
-      audio.preload = 'auto';
-      
-      // Add a small waiting period for iOS to properly initialize
-      setTimeout(() => {
-        // Set audio properties
-        audio.src = sound.data;
-        audio.loop = !!looping[sound.id];
         
-        // Set volume based on sound settings and master volume
-        const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
-        audio.volume = Math.max(0, Math.min(1, baseVolume * masterVolume));
-        
-        // Set up event handlers
+        // Set up event handlers before setting src
         const onEnded = () => {
           if (!looping[sound.id]) {
             setPlaying(prev => ({ ...prev, [sound.id]: false }));
@@ -597,83 +680,69 @@ export default function App() {
         };
         
         const onTimeUpdate = () => {
-          setAudioPositions(prev => ({ ...prev, [sound.id]: audio.currentTime }));
+          if (audio.currentTime > 0) { // Only update if actually playing
+            setAudioPositions(prev => ({ ...prev, [sound.id]: audio.currentTime }));
+          }
         };
         
         const onError = (e) => {
-          console.error(`Audio playback error for ${sound.name}:`, e);
+          // Enhanced error object logging
+          const errorDetails = {
+            code: audio.error?.code,
+            message: audio.error?.message,
+            name: audio.error?.name,
+            raw: e
+          };
+          console.error(`Audio playback error for ${sound.name}:`, errorDetails);
+          
+          // Provide specific error messages based on error code
+          let errorMessage = 'Unknown error';
+          
+          if (audio.error) {
+            switch (audio.error.code) {
+              case 1: // MEDIA_ERR_ABORTED
+                errorMessage = 'Playback aborted';
+                break;
+              case 2: // MEDIA_ERR_NETWORK
+                errorMessage = 'Network error';
+                break;
+              case 3: // MEDIA_ERR_DECODE
+                errorMessage = 'Audio format not supported';
+                if (isIOS) {
+                  errorMessage += ' (iPad may require MP3 format)';
+                }
+                break;
+              case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
+                errorMessage = 'Audio source not supported';
+                break;
+              default:
+                errorMessage = audio.error.message || 'Playback error';
+            }
+          }
+          
           setPlaying(prev => ({ ...prev, [sound.id]: false }));
-          setError(`Error playing "${sound.name}": ${audio.error?.message || 'Unknown error'}`);
+          setError(`Error playing "${sound.name}": ${errorMessage}`);
         };
         
         // Add event listeners
         audio.addEventListener('ended', onEnded);
         audio.addEventListener('timeupdate', onTimeUpdate);
-        audio.addEventListener('error', onError);
+        audio.addEventListener('error', onError, true); // Capture phase for better error catching
         
-        // Try to play the sound with iOS compatibility
-        let playSuccess = false;
+        // Set source
+        audio.src = sound.data;
         
-        const attemptPlay = async () => {
-          try {
-            // Play with a catch for autoplay restrictions
-            const playPromise = audio.play();
-            if (playPromise !== undefined) {
-              playPromise.then(() => {
-                playSuccess = true;
-                setPlaying(prev => ({ ...prev, [sound.id]: true }));
-                setPaused(prev => {
-                  const newState = { ...prev };
-                  delete newState[sound.id]; // Remove from paused state
-                  return newState;
-                });
-              }).catch(err => {
-                // Handle iOS autoplay policy error
-                if (err.name === 'NotAllowedError') {
-                  console.warn('iOS autoplay prevented, trying to unlock audio...');
-                  
-                  // Create iOS specific unlock function
-                  const unlockIOSAudio = async () => {
-                    try {
-                      // These need to be inside the function to work on iOS
-                      if (audioContextRef.current) {
-                        await audioContextRef.current.resume();
-                      }
-                      await audio.play();
-                      playSuccess = true;
-                      
-                      // Update state
-                      setPlaying(prev => ({ ...prev, [sound.id]: true }));
-                      setPaused(prev => ({ ...prev, [sound.id]: false })); // Clear paused state
-                      
-                      // Remove event listeners after successful play
-                      document.removeEventListener('touchend', unlockIOSAudio);
-                    } catch (unlockErr) {
-                      console.error('Failed to unlock iOS audio:', unlockErr);
-                      setError('Please tap anywhere to enable audio playback');
-                    }
-                  };
-                  
-                  // Use touchend specifically for iOS
-                  document.addEventListener('touchend', unlockIOSAudio, { once: true });
-                  
-                  setError('Audio playback requires interaction on iOS. Please tap anywhere.');
-                } else {
-                  console.error('Audio play error:', err);
-                  setError(`Couldn't play sound: ${err.message}`);
-                }
-              });
-            }
-          } catch (err) {
-            console.error('Audio play error:', err);
-            setError(`Couldn't play sound: ${err.message}`);
-          }
-        };
+        // Configure audio
+        audio.loop = !!looping[sound.id];
         
-        // Attempt to play (with slight delay for iOS)
-        attemptPlay();
+        // Set volume based on settings
+        const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
+        audio.volume = Math.max(0, Math.min(1, baseVolume * masterVolume));
         
-        // Update audio map
+        // Load the audio 
+        audio.load();
+        
+        // Update audio map early to ensure it's available
         setAudioMap(prev => ({
           ...prev,
           [sound.id]: audio
@@ -682,11 +751,70 @@ export default function App() {
         // Initialize position
         setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
         
-      }, 100); // Short delay to avoid iOS glitches
-      
-    } catch (err) {
-      console.error('Error in handlePlayPause:', err);
-      setError(`Playback error: ${err.message}`);
+        // iPad-specific handling with user gesture requirement
+        const playWithIOSHandling = async () => {
+          try {
+            // Try to play normally first
+            await audio.play();
+            
+            // If we get here, playback started successfully
+            setPlaying(prev => ({ ...prev, [sound.id]: true }));
+            setPaused(prev => {
+              const newState = { ...prev };
+              delete newState[sound.id]; // Remove from paused state
+              return newState;
+            });
+          } catch (err) {
+            console.warn('iOS play attempt failed:', err);
+            
+            if (err.name === 'NotAllowedError') {
+              setError('iPad requires user interaction to play audio. Tap anywhere.');
+              
+              // Create one-time touch handler for iOS
+              const handleIOSTouch = async () => {
+                try {
+                  // Resume any audio contexts
+                  if (audioContextRef.current) {
+                    await audioContextRef.current.resume();
+                  }
+                  
+                  // Try playing again after user interaction
+                  await audio.play();
+                  
+                  // Update UI state
+                  setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                  setPaused(prev => ({ ...prev, [sound.id]: false }));
+                  
+                  // Clear error
+                  setError(null);
+                } catch (retryErr) {
+                  console.error('iOS retry failed:', retryErr);
+                  setError(`Could not play sound on iPad: ${retryErr.message || 'Unknown error'}. Try reloading.`);
+                } finally {
+                  // Always remove listener
+                  document.removeEventListener('touchend', handleIOSTouch);
+                }
+              };
+              
+              // Add the touch handler
+              document.addEventListener('touchend', handleIOSTouch, { once: true });
+            } else {
+              // Handle other errors
+              setError(`Couldn't play sound: ${err.message || 'Unknown error'}`);
+            }
+          }
+        };
+        
+        // Start playback with iOS handling
+        playWithIOSHandling();
+        
+      } catch (err) {
+        console.error('Error in handlePlayPause:', err);
+        setError(`Playback error: ${err.message || 'Unknown error'}`);
+      }
+    } catch (outerErr) {
+      console.error('Unexpected error in handlePlayPause:', outerErr);
+      setError(`Unexpected error: ${outerErr.message || 'Unknown error'}`);
     }
   };
   
@@ -2174,7 +2302,7 @@ export default function App() {
                   <input
                     type="file"
                     accept="audio/mp3,audio/mpeg,audio/wav,audio/ogg,audio/*"
-                    capture={/iPad|iPhone|iPod/.test(navigator.userAgent) && "filesystem"}
+                    capture={isiPad && "filesystem"}
                     onChange={(e) => {
                       try {
                         const selectedFile = e.target.files?.[0];
@@ -2217,7 +2345,7 @@ export default function App() {
                 </Button>
 
                 {/* iOS helper text */}
-                {/iPad|iPhone|iPod/.test(navigator.userAgent) && (
+                {isiPad && (
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', textAlign: 'center' }}>
                     Tap to select from your files. On iPad, use the Files app to access your sound files.
                   </Typography>
