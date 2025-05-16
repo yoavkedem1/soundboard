@@ -599,6 +599,16 @@ export default function App() {
         return;
       }
       
+      // Check if the sound file might be too large
+      if (sound.fileSize && sound.fileSize > 50) {
+        console.warn(`Attempting to play large file: ${sound.fileSize}MB`);
+        if (isIOS) {
+          console.warn('Large audio files may fail on iOS devices');
+          setError(`Warning: This ${sound.fileSize}MB file may be too large for iPad. If playback fails, try using smaller audio files (under 10MB).`);
+          setTimeout(() => handleErrorClose(), 5000);
+        }
+      }
+      
       // If already playing, pause it (but don't remove from mixer)
       if (playing[sound.id]) {
         // Get the audio element
@@ -1054,13 +1064,20 @@ export default function App() {
       
       // Check if the file is of a compatible format
       const fileType = newSound.file.type.toLowerCase();
-      console.log(`Processing file: ${newSound.file.name}, type: ${fileType}`);
+      const fileSizeMB = Math.round(newSound.file.size / (1024 * 1024) * 10) / 10; // Size in MB with 1 decimal
+      console.log(`Processing file: ${newSound.file.name}, type: ${fileType}, size: ${fileSizeMB}MB`);
+      
+      // Check file size and warn if too large
+      let compatibilityWarning = null;
+      if (fileSizeMB > 50) {
+        console.warn(`File size (${fileSizeMB}MB) may be too large for mobile devices`);
+        compatibilityWarning = `Large audio file (${fileSizeMB}MB) may cause playback issues on mobile devices. Files under 10MB are recommended.`;
+      }
       
       // Handle iOS-specific format considerations
-      let compatibilityWarning = null;
       if (isIOS && !fileType.includes('mp3') && !fileType.includes('m4a') && !fileType.includes('aac')) {
         console.warn(`File format ${fileType} might not be compatible with iOS`);
-        compatibilityWarning = "This audio format may not work on iPad. MP3 or M4A formats are recommended.";
+        compatibilityWarning = compatibilityWarning || "This audio format may not work on iPad. MP3 or M4A formats are recommended.";
       }
       
       // Convert file to data URL
@@ -1079,7 +1096,8 @@ export default function App() {
         duration: Math.round(duration),
         dateAdded: new Date().toISOString(),
         volume: newSound.volume || 0.7, // Include volume in the sound object
-        format: fileType // Store the original file format
+        format: fileType, // Store the original file format
+        fileSize: fileSizeMB // Store file size for reference
       };
       
       // Save to database
@@ -1097,7 +1115,7 @@ export default function App() {
       // Show compatibility warning if applicable
       if (compatibilityWarning) {
         setError(compatibilityWarning);
-        setTimeout(() => handleErrorClose(), 5000);
+        setTimeout(() => handleErrorClose(), 6000); // Give more time to read the warning
       }
       
       // Close dialog
@@ -1242,6 +1260,8 @@ export default function App() {
       return;
     }
     
+    console.log(`Changing volume for ${sound.name} to ${newValue}, device: ${isIOS ? 'iOS' : 'other'}`);
+    
     // Update the sound's base volume
     const updatedSound = { ...sound, volume: newValue };
     
@@ -1258,16 +1278,44 @@ export default function App() {
     const audio = audioMap[id];
     if (audio) {
       try {
-        // Force true muting for very low volumes (0-1%)
-        if (effectiveVolume <= 0.01) {
-          console.log(`Setting ${sound.name} to truly muted`);
-          audio.muted = true;
-          audio.volume = 0;
+        // Special handling for iOS devices which have volume quirks
+        if (isIOS) {
+          // On iOS, first try direct volume control
+          try {
+            // For iOS we need to ensure we're not hitting issues with timings
+            // Set muted state first
+            if (effectiveVolume <= 0.01) {
+              audio.muted = true;
+              audio.volume = 0;
+            } else {
+              // For iOS, order matters - unmute first, then set volume
+              audio.muted = false;
+              // Small delay to ensure mute state is applied
+              setTimeout(() => {
+                try {
+                  const clampedVolume = Math.max(0, Math.min(1, effectiveVolume));
+                  audio.volume = clampedVolume;
+                  console.log(`iOS: Set volume for ${sound.name} to ${clampedVolume}`);
+                } catch (volErr) {
+                  console.error(`iOS: Failed to set volume: ${volErr}`);
+                }
+              }, 10);
+            }
+          } catch (iosErr) {
+            console.warn(`iOS volume issue for ${sound.name}:`, iosErr);
+          }
         } else {
-          audio.muted = false;
-          const clampedVolume = Math.max(0, Math.min(1, effectiveVolume));
-          audio.volume = clampedVolume;
-          console.log(`Setting ${sound.name} volume to ${audio.volume} (effective: ${effectiveVolume})`);
+          // Standard handling for non-iOS devices
+          if (effectiveVolume <= 0.01) {
+            console.log(`Setting ${sound.name} to truly muted`);
+            audio.muted = true;
+            audio.volume = 0;
+          } else {
+            audio.muted = false;
+            const clampedVolume = Math.max(0, Math.min(1, effectiveVolume));
+            audio.volume = clampedVolume;
+            console.log(`Setting ${sound.name} volume to ${audio.volume} (effective: ${effectiveVolume})`);
+          }
         }
       } catch (err) {
         console.error(`Error setting volume for ${sound.name}:`, err);
