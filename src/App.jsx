@@ -156,8 +156,15 @@ function getDuration(file) {
 function fileToDataURL(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
+    reader.onload = () => {
+      // Log successful file read for debugging
+      console.log(`File read successful: ${file.name}, type: ${file.type}, size: ${Math.round(file.size/1024)}KB`);
+      resolve(reader.result);
+    };
+    reader.onerror = (error) => {
+      console.error(`Error reading file: ${file.name}`, error);
+      reject(error);
+    };
     reader.readAsDataURL(file);
   });
 }
@@ -198,7 +205,7 @@ function initializeIOSAudio() {
   });
 }
 
-// Function to decode audio data for iOS
+  // Function to decode audio data for iOS
 function decodeAudioDataForIOS(audioContext, dataUrl) {
   return new Promise((resolve, reject) => {
     // Extract base64 data from data URL
@@ -221,12 +228,36 @@ function decodeAudioDataForIOS(audioContext, dataUrl) {
       
       const audioData = bytes.buffer;
       
-      // Decode the audio data
+      // Log buffer size for debugging
+      console.log(`iOS decodeAudio: processing ${Math.round(audioData.byteLength/1024)}KB of audio data`);
+      
+      // First try the promise-based API (standard)
       audioContext.decodeAudioData(audioData)
-        .then(decodedData => resolve(decodedData))
+        .then(decodedData => {
+          console.log('iOS decodeAudio: successfully decoded audio data (promise API)');
+          resolve(decodedData);
+        })
         .catch(err => {
-          console.error('Error decoding audio data:', err);
-          reject(err);
+          console.warn('Error with promise decodeAudioData API:', err);
+          
+          // Fallback to callback API for older Safari versions
+          try {
+            audioContext.decodeAudioData(audioData, 
+              // Success callback
+              (decodedData) => {
+                console.log('iOS decodeAudio: successfully decoded audio data (callback API)');
+                resolve(decodedData);
+              },
+              // Error callback
+              (err) => {
+                console.error('Error with callback decodeAudioData API:', err);
+                reject(err);
+              }
+            );
+          } catch (callbackErr) {
+            console.error('Error using callback API:', callbackErr);
+            reject(callbackErr);
+          }
         });
     } catch (err) {
       console.error('Error processing audio data:', err);
@@ -716,11 +747,43 @@ export default function App() {
               case 3: // MEDIA_ERR_DECODE
                 errorMessage = 'Audio format not supported';
                 if (isIOS) {
-                  errorMessage += ' (iPad may require MP3 format)';
+                  // For iOS decode errors, let's try to recover with a different approach
+                  console.log('Attempting iOS-specific audio recovery for decode error');
+                  try {
+                    // Try the iOS-specific recovery approach
+                    initializeIOSAudio().then(iosContext => {
+                      if (iosContext && sound.data) {
+                        // Try playing using a different approach for iOS
+                        const tempAudio = new Audio();
+                        tempAudio.src = sound.data;
+                        tempAudio.load();
+                        tempAudio.play().then(() => {
+                          // If successful, replace the problematic audio
+                          console.log('iOS recovery successful');
+                          audio.src = sound.data;
+                          setAudioMap(prev => ({...prev, [sound.id]: tempAudio}));
+                          setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                          return; // Exit early if recovery worked
+                        }).catch(recoverErr => {
+                          console.error('iOS recovery play failed:', recoverErr);
+                          errorMessage += ' (Try converting to MP3/M4A format for iPad compatibility)';
+                          setPlaying(prev => ({ ...prev, [sound.id]: false }));
+                          setError(`Error playing "${sound.name}": ${errorMessage}`);
+                        });
+                      }
+                    });
+                    return; // Exit early as we're handling it asynchronously
+                  } catch (recoveryError) {
+                    console.error('iOS recovery attempt failed:', recoveryError);
+                    errorMessage += ' (Try converting to MP3/M4A format for iPad compatibility)';
+                  }
                 }
                 break;
               case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
                 errorMessage = 'Audio source not supported';
+                if (isIOS) {
+                  errorMessage += ' (Try converting to MP3/M4A format for iPad compatibility)';
+                }
                 break;
               default:
                 errorMessage = audio.error.message || 'Playback error';
@@ -729,7 +792,7 @@ export default function App() {
           
           setPlaying(prev => ({ ...prev, [sound.id]: false }));
           setError(`Error playing "${sound.name}": ${errorMessage}`);
-        };
+      };
         
         // Add event listeners
         audio.addEventListener('ended', onEnded);
@@ -989,6 +1052,17 @@ export default function App() {
     try {
       setLoading(true);
       
+      // Check if the file is of a compatible format
+      const fileType = newSound.file.type.toLowerCase();
+      console.log(`Processing file: ${newSound.file.name}, type: ${fileType}`);
+      
+      // Handle iOS-specific format considerations
+      let compatibilityWarning = null;
+      if (isIOS && !fileType.includes('mp3') && !fileType.includes('m4a') && !fileType.includes('aac')) {
+        console.warn(`File format ${fileType} might not be compatible with iOS`);
+        compatibilityWarning = "This audio format may not work on iPad. MP3 or M4A formats are recommended.";
+      }
+      
       // Convert file to data URL
       const data = await fileToDataURL(newSound.file);
       const duration = await getDuration(newSound.file);
@@ -1004,7 +1078,8 @@ export default function App() {
         groupId: newSound.groupId || 'none',
         duration: Math.round(duration),
         dateAdded: new Date().toISOString(),
-        volume: newSound.volume || 0.7 // Include volume in the sound object
+        volume: newSound.volume || 0.7, // Include volume in the sound object
+        format: fileType // Store the original file format
       };
       
       // Save to database
@@ -1018,6 +1093,12 @@ export default function App() {
         ...prev,
         [savedSound.id]: savedSound.volume || 0.7
       }));
+      
+      // Show compatibility warning if applicable
+      if (compatibilityWarning) {
+        setError(compatibilityWarning);
+        setTimeout(() => handleErrorClose(), 5000);
+      }
       
       // Close dialog
       handleAddSoundClose();
