@@ -24,6 +24,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import MusicNoteIcon from '@mui/icons-material/MusicNote';
 import StopIcon from '@mui/icons-material/Stop';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import CloseIcon from '@mui/icons-material/Close';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import { saveSound, getAllSounds, deleteSound, saveGroup, getAllGroups, resetDatabase, initializeDatabase } from './db';
 
@@ -210,6 +211,7 @@ export default function App() {
   const fileInputRef = useRef();
   const audioContextRef = useRef(null);
   const audioSourcesRef = useRef({});
+  const dataRetryRef = useRef(null);
   
   // Function to cancel all loading operations
   const cancelLoadingOperations = (exceptId = null) => {
@@ -235,56 +237,115 @@ export default function App() {
     }
   };
   
-  // Initialize audio context only after user interaction
+  // Initialize audio context only after user interaction - With enhanced iOS compatibility
   useEffect(() => {
+    // Flag to track if component is mounted
+    let mounted = true;
+    
     // Function to create and unlock AudioContext
     const setupAudio = async () => {
       try {
         // Only create if not already created
-        if (!audioContextRef.current) {
+        if (!audioContextRef.current && mounted) {
           console.log('Creating AudioContext...');
           const AudioContext = window.AudioContext || window.webkitAudioContext;
           audioContextRef.current = new AudioContext();
+          
+          // iOS Safari specific unlocking
+          if (audioContextRef.current.state === 'suspended') {
+            console.log('AudioContext suspended, attempting to resume for iOS...');
+            // iOS specific WebAudio unlock
+            const unlock = async () => {
+              if (audioContextRef.current && mounted) {
+                // Create and play short silent buffer
+                const buffer = audioContextRef.current.createBuffer(1, 1, 22050);
+                const source = audioContextRef.current.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioContextRef.current.destination);
+                
+                // Play the silent sound (required for iOS)
+                if (source.start) {
+                  source.start(0);
+                } else {
+                  source.noteOn(0);
+                }
+                
+                // Resume context after the silent play attempt
+                if (audioContextRef.current.state === 'suspended') {
+                  await audioContextRef.current.resume();
+                }
+                
+                console.log('iOS audio unlock attempt complete, state:', audioContextRef.current.state);
+              }
+            };
+            
+            // Run unlock
+            await unlock();
+          }
+          
+          if (mounted) {
+            setAudioContextInitialized(true);
+            console.log('AudioContext initialized:', audioContextRef.current.state);
+          }
         }
-        
-        // Try to resume if suspended
-        if (audioContextRef.current.state === 'suspended') {
-          console.log('Resuming AudioContext...');
-          await audioContextRef.current.resume();
-        }
-        
-        setAudioContextInitialized(true);
-        console.log('AudioContext initialized:', audioContextRef.current.state);
-        
-        // Remove event listeners
-        document.removeEventListener('click', setupAudio);
-        document.removeEventListener('touchstart', setupAudio);
-        document.removeEventListener('keydown', setupAudio);
       } catch (err) {
         console.warn('AudioContext initialization error:', err);
       }
     };
     
-    // Add event listeners for user interaction
-    document.addEventListener('click', setupAudio);
-    document.addEventListener('touchstart', setupAudio);
-    document.addEventListener('keydown', setupAudio);
+    // Add event listeners for user interaction - iOS compatible
+    const setupAudioHandler = () => {
+      setupAudio();
+      // Don't immediately remove these for iOS - might need multiple interactions
+      setTimeout(() => {
+        if (audioContextRef.current && audioContextRef.current.state === 'running') {
+          // Only remove listeners if we confirmed audio is working
+          document.removeEventListener('click', setupAudioHandler);
+          document.removeEventListener('touchend', setupAudioHandler);
+          document.removeEventListener('touchstart', setupAudioHandler);
+          document.removeEventListener('keydown', setupAudioHandler);
+        }
+      }, 1000);
+    };
+    
+    // Add event listeners - iOS compatibility requires touchend and touchstart
+    document.addEventListener('click', setupAudioHandler);
+    document.addEventListener('touchend', setupAudioHandler); // Critical for iOS
+    document.addEventListener('touchstart', setupAudioHandler);
+    document.addEventListener('keydown', setupAudioHandler);
+    
+    // iOS requires a user gesture to initialize audio
+    if (typeof navigator !== 'undefined' && /iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      console.log('iOS device detected, displaying audio start instructions...');
+      setError('Tap anywhere on the screen to enable audio playback');
+    }
     
     return () => {
-      // Clean up listeners
-      document.removeEventListener('click', setupAudio);
-      document.removeEventListener('touchstart', setupAudio);
-      document.removeEventListener('keydown', setupAudio);
+      mounted = false;
+      document.removeEventListener('click', setupAudioHandler);
+      document.removeEventListener('touchend', setupAudioHandler);
+      document.removeEventListener('touchstart', setupAudioHandler);
+      document.removeEventListener('keydown', setupAudioHandler);
       
-      // Close AudioContext if it exists
-      if (audioContextRef.current) {
-        try {
-          audioContextRef.current.close().catch(err => {
-            console.warn('Error closing AudioContext:', err);
-          });
-        } catch (err) {
-          console.warn('Error closing AudioContext:', err);
+      // Also cleanup any audio resources
+      Object.values(audioMap).forEach(audio => {
+        if (audio) {
+          try {
+            audio.pause();
+            audio.src = '';
+            audio.onended = null;
+            audio.ontimeupdate = null;
+            audio.onerror = null;
+          } catch (err) {
+            console.warn('Error cleaning up audio:', err);
+          }
         }
+      });
+      
+      // Clear any pending data retry
+      if (dataRetryRef.current) {
+        clearTimeout(dataRetryRef.current);
+        dataRetryRef.current = null;
       }
     };
   }, []);
@@ -301,18 +362,87 @@ export default function App() {
   
   // Initialize database on mount
   useEffect(() => {
+    let mounted = true;
+    
     const init = async () => {
       try {
         // Initialize database (will handle legacy database cleanup)
         await initializeDatabase();
+        
+        if (!mounted) return;
+        
+        // Load data after DB is initialized
+        await loadData();
       } catch (err) {
+        if (!mounted) return;
         console.error('Database initialization error:', err);
         setError('Database initialization failed. Try resetting the app data.');
       }
     };
     
+    // Track user visibility to refresh data if needed
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('Tab became visible again, reloading data...');
+        loadData();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     init();
+    
+    return () => {
+      mounted = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
+  
+  // Load sounds and groups from IndexedDB
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Get latest sounds and groups from database
+      const [loadedGroups, loadedSounds] = await Promise.all([
+        getAllGroups(),
+        getAllSounds()
+      ]);
+      
+      if (loadedSounds.length === 0 && !dataRetryRef.current) {
+        console.log('No sounds loaded on first try, scheduling retry...');
+        dataRetryRef.current = setTimeout(async () => {
+          console.log('Retrying data load...');
+          dataRetryRef.current = null;
+          await loadData();
+        }, 1000);
+        return;
+      }
+      
+      console.log(`Loaded ${loadedSounds.length} sounds and ${loadedGroups.length} groups`);
+      setSounds(loadedSounds);
+      setGroups(loadedGroups);
+      
+      // Initialize audio context if sounds were loaded but only on user interaction
+      if (loadedSounds.length > 0) {
+        const setupAudioForSounds = () => {
+          // iOS requires user interaction to initialize audio
+          getAudioContext();
+          document.removeEventListener('touchstart', setupAudioForSounds);
+          document.removeEventListener('click', setupAudioForSounds);
+        };
+        
+        // Add both click and touch listeners for better iOS compatibility
+        document.addEventListener('touchstart', setupAudioForSounds, { once: true });
+        document.addEventListener('click', setupAudioForSounds, { once: true });
+      }
+    } catch (err) {
+      console.error('Error loading data:', err);
+      setError(`Failed to load sounds: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
   
   // Get all categories (predefined + custom)
   const allCategories = [
@@ -320,94 +450,6 @@ export default function App() {
     ...predefinedCategories.map(cat => ({ id: cat.toLowerCase(), name: cat })),
     ...groups.filter(g => !predefinedCategories.map(c => c.toLowerCase()).includes(g.name.toLowerCase()))
   ];
-
-  // Load sounds and groups from IndexedDB on mount
-  useEffect(() => {
-    let mounted = true;
-    
-    const loadData = async () => {
-      if (!mounted) return;
-      
-      try {
-        console.log('Loading data from database...');
-        setLoading(true);
-        
-        // Get groups data
-        const groupsData = await getAllGroups();
-        if (mounted) {
-          setGroups(groupsData || []);
-        }
-        
-        // Get sounds data
-        const soundsData = await getAllSounds();
-        if (!mounted) return; // Check mounted again
-        
-        // Filter out invalid sounds
-        const validSounds = soundsData.filter(sound => {
-          const isValid = sound && sound.data && typeof sound.data === 'string' && sound.data.trim() !== '';
-          if (!isValid) {
-            console.warn('Found invalid sound data, will be ignored:', sound);
-          }
-          return isValid;
-        });
-        
-        // Update state with valid sounds
-        setSounds(validSounds || []);
-        
-        // Initialize volume settings
-        const initialVolumes = {};
-        validSounds.forEach(sound => {
-          initialVolumes[sound.id] = sound.volume || 0.7;
-        });
-        setVolumes(initialVolumes);
-        
-        console.log(`Successfully loaded ${validSounds.length} sounds and ${groupsData.length} groups`);
-      } catch (err) {
-        console.error('Error loading data:', err);
-        if (mounted) {
-          setError('Failed to load sounds. Please try resetting the database.');
-        }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    };
-    
-    // Load data immediately
-    loadData();
-    
-    // Set up reload on visibility change (e.g. when coming back to tab)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && mounted) {
-        console.log('Tab became visible, refreshing data...');
-        loadData();
-      }
-    };
-    
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    // Cleanup function
-    return () => {
-      mounted = false;
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      
-      // Also cleanup any audio resources
-      Object.values(audioMap).forEach(audio => {
-        if (audio) {
-          try {
-            audio.pause();
-            audio.src = '';
-            audio.onended = null;
-            audio.ontimeupdate = null;
-            audio.onerror = null;
-          } catch (err) {
-            console.warn('Error cleaning up audio:', err);
-          }
-        }
-      });
-    };
-  }, []);
   
   // Handle category change
   const handleCategoryChange = (event, newValue) => {
@@ -432,7 +474,7 @@ export default function App() {
     return true;
   };
   
-  // Handle play/pause for a sound
+  // Handle play/pause for a sound - Improved for iOS compatibility
   const handlePlayPause = async (sound) => {
     try {
       if (!isSoundDataValid(sound)) {
@@ -464,9 +506,36 @@ export default function App() {
       if (paused[sound.id] && audioMap[sound.id]) {
         const audio = audioMap[sound.id];
         try {
-          await audio.play();
-          setPlaying(prev => ({ ...prev, [sound.id]: true }));
-          setPaused(prev => ({ ...prev, [sound.id]: false }));
+          // iOS requires user interaction to play audio
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.then(() => {
+              setPlaying(prev => ({ ...prev, [sound.id]: true }));
+              setPaused(prev => ({ ...prev, [sound.id]: false }));
+            }).catch(err => {
+              console.error('Error resuming audio:', err);
+              if (err.name === 'NotAllowedError') {
+                setError('iOS requires user interaction. Please tap on the screen.');
+                // Create iOS specific unlock function
+                const unlockIOSAudio = async () => {
+                  try {
+                    if (audioContextRef.current) {
+                      await audioContextRef.current.resume();
+                    }
+                    await audio.play();
+                    setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                    setPaused(prev => ({ ...prev, [sound.id]: false }));
+                    document.removeEventListener('touchend', unlockIOSAudio);
+                  } catch (unlockErr) {
+                    console.error('Failed to unlock iOS audio:', unlockErr);
+                  }
+                };
+                document.addEventListener('touchend', unlockIOSAudio, { once: true });
+              } else {
+                setError(`Error resuming "${sound.name}": ${err.message}`);
+              }
+            });
+          }
         } catch (err) {
           console.error('Error resuming audio:', err);
           setError(`Error resuming "${sound.name}": ${err.message}`);
@@ -474,118 +543,143 @@ export default function App() {
         return;
       }
       
-      // Initialize AudioContext on demand
+      // Initialize AudioContext on demand - iOS compatible approach
       if (!audioContextRef.current) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audioContextRef.current = new AudioContext();
         
-        // If suspended, try to resume
+        // If suspended (likely on iOS), try to resume
         if (audioContextRef.current.state === 'suspended') {
           try {
+            // iOS requires a short buffer sound to be played
+            const buffer = audioContextRef.current.createBuffer(1, 1, 22050);
+            const source = audioContextRef.current.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContextRef.current.destination);
+            if (source.start) {
+              source.start(0);
+            } else {
+              source.noteOn(0);
+            }
+            
             await audioContextRef.current.resume();
           } catch (err) {
-            console.warn('Could not resume AudioContext:', err);
+            console.warn('Could not resume AudioContext for iOS:', err);
           }
         }
       }
       
-      // Create a new Audio element
+      // Create a new Audio element with iOS optimizations
       const audio = new Audio();
       
-      // Set audio properties
-      audio.src = sound.data;
+      // iOS Safari requires preload metadata for better playback
       audio.preload = 'auto';
-      audio.loop = !!looping[sound.id];
       
-      // Set volume based on sound settings and master volume
-      const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
-      audio.volume = Math.max(0, Math.min(1, baseVolume * masterVolume));
-      
-      // Set up event handlers
-      const onEnded = () => {
-        if (!looping[sound.id]) {
+      // Add a small waiting period for iOS to properly initialize
+      setTimeout(() => {
+        // Set audio properties
+        audio.src = sound.data;
+        audio.loop = !!looping[sound.id];
+        
+        // Set volume based on sound settings and master volume
+        const baseVolume = sound.volume !== undefined ? sound.volume : 0.7;
+        audio.volume = Math.max(0, Math.min(1, baseVolume * masterVolume));
+        
+        // Set up event handlers
+        const onEnded = () => {
+          if (!looping[sound.id]) {
+            setPlaying(prev => ({ ...prev, [sound.id]: false }));
+            setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
+          }
+        };
+        
+        const onTimeUpdate = () => {
+          setAudioPositions(prev => ({ ...prev, [sound.id]: audio.currentTime }));
+        };
+        
+        const onError = (e) => {
+          console.error(`Audio playback error for ${sound.name}:`, e);
           setPlaying(prev => ({ ...prev, [sound.id]: false }));
-          setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
-        }
-      };
-      
-      const onTimeUpdate = () => {
-        setAudioPositions(prev => ({ ...prev, [sound.id]: audio.currentTime }));
-      };
-      
-      const onError = (e) => {
-        console.error(`Audio playback error for ${sound.name}:`, e);
-        setPlaying(prev => ({ ...prev, [sound.id]: false }));
-        setError(`Error playing "${sound.name}": ${audio.error?.message || 'Unknown error'}`);
-      };
-      
-      // Add event listeners
-      audio.addEventListener('ended', onEnded);
-      audio.addEventListener('timeupdate', onTimeUpdate);
-      audio.addEventListener('error', onError);
-      
-      // Try to play the sound
-      let playSuccess = false;
-      try {
-        // Play with a catch for autoplay restrictions
-        await audio.play();
-        playSuccess = true;
-      } catch (err) {
-        // Handle autoplay policy error
-        if (err.name === 'NotAllowedError') {
-          console.warn('Autoplay prevented, trying to unlock audio...');
-          
-          // Create unlock function
-          const unlockAudio = async () => {
-            try {
-              await audioContextRef.current.resume();
-              await audio.play();
-              playSuccess = true;
-              
-              // Update state
-              setPlaying(prev => ({ ...prev, [sound.id]: true }));
-              setPaused(prev => ({ ...prev, [sound.id]: false })); // Clear paused state
-              
-              // Remove event listeners after successful play
-              document.removeEventListener('click', unlockAudio);
-              document.removeEventListener('touchstart', unlockAudio);
-              document.removeEventListener('keydown', unlockAudio);
-            } catch (unlockErr) {
-              console.error('Failed to unlock audio:', unlockErr);
-              setError('Please interact with the page to enable audio playback');
+          setError(`Error playing "${sound.name}": ${audio.error?.message || 'Unknown error'}`);
+        };
+        
+        // Add event listeners
+        audio.addEventListener('ended', onEnded);
+        audio.addEventListener('timeupdate', onTimeUpdate);
+        audio.addEventListener('error', onError);
+        
+        // Try to play the sound with iOS compatibility
+        let playSuccess = false;
+        
+        const attemptPlay = async () => {
+          try {
+            // Play with a catch for autoplay restrictions
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+              playPromise.then(() => {
+                playSuccess = true;
+                setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                setPaused(prev => {
+                  const newState = { ...prev };
+                  delete newState[sound.id]; // Remove from paused state
+                  return newState;
+                });
+              }).catch(err => {
+                // Handle iOS autoplay policy error
+                if (err.name === 'NotAllowedError') {
+                  console.warn('iOS autoplay prevented, trying to unlock audio...');
+                  
+                  // Create iOS specific unlock function
+                  const unlockIOSAudio = async () => {
+                    try {
+                      // These need to be inside the function to work on iOS
+                      if (audioContextRef.current) {
+                        await audioContextRef.current.resume();
+                      }
+                      await audio.play();
+                      playSuccess = true;
+                      
+                      // Update state
+                      setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                      setPaused(prev => ({ ...prev, [sound.id]: false })); // Clear paused state
+                      
+                      // Remove event listeners after successful play
+                      document.removeEventListener('touchend', unlockIOSAudio);
+                    } catch (unlockErr) {
+                      console.error('Failed to unlock iOS audio:', unlockErr);
+                      setError('Please tap anywhere to enable audio playback');
+                    }
+                  };
+                  
+                  // Use touchend specifically for iOS
+                  document.addEventListener('touchend', unlockIOSAudio, { once: true });
+                  
+                  setError('Audio playback requires interaction on iOS. Please tap anywhere.');
+                } else {
+                  console.error('Audio play error:', err);
+                  setError(`Couldn't play sound: ${err.message}`);
+                }
+              });
             }
-          };
-          
-          // Add temporary listeners to unlock audio on user interaction
-          document.addEventListener('click', unlockAudio, { once: true });
-          document.addEventListener('touchstart', unlockAudio, { once: true });
-          document.addEventListener('keydown', unlockAudio, { once: true });
-          
-          setError('Audio playback requires user interaction. Please tap or click anywhere.');
-        } else {
-          console.error('Audio play error:', err);
-          setError(`Couldn't play sound: ${err.message}`);
-        }
-      }
-      
-      // Only update state if play was successful
-      if (playSuccess) {
-        setPlaying(prev => ({ ...prev, [sound.id]: true }));
-        setPaused(prev => {
-          const newState = { ...prev };
-          delete newState[sound.id]; // Remove from paused state
-          return newState;
-        });
-      }
-      
-      // Update audio map
-      setAudioMap(prev => ({
-        ...prev,
-        [sound.id]: audio
-      }));
-      
-      // Initialize position
-      setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
+          } catch (err) {
+            console.error('Audio play error:', err);
+            setError(`Couldn't play sound: ${err.message}`);
+          }
+        };
+        
+        // Attempt to play (with slight delay for iOS)
+        attemptPlay();
+        
+        // Update audio map
+        setAudioMap(prev => ({
+          ...prev,
+          [sound.id]: audio
+        }));
+        
+        // Initialize position
+        setAudioPositions(prev => ({ ...prev, [sound.id]: 0 }));
+        
+      }, 100); // Short delay to avoid iOS glitches
       
     } catch (err) {
       console.error('Error in handlePlayPause:', err);
@@ -1090,7 +1184,8 @@ export default function App() {
             transform: dragMode ? 'none' : 'translateY(-2px)',
             boxShadow: '0 8px 20px rgba(0,0,0,0.2)',
           },
-          cursor: dragMode ? 'move' : 'default'
+          cursor: dragMode ? 'move' : 'default',
+          WebkitTapHighlightColor: 'transparent', // iOS fix
         }}
       >
         {/* Drag handle only shown in drag mode */}
@@ -1104,6 +1199,7 @@ export default function App() {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 10,
+            padding: '8px', // Larger touch area for iOS
           }}>
             <DragIndicatorIcon />
           </Box>
@@ -1143,55 +1239,84 @@ export default function App() {
           >
             <span style={{ marginRight: 8 }}>{sound.emoji || '🔊'}</span>
             {sound.name}
+            {/* Loop indicator */}
+            {isLooping && (
+              <Box 
+                component="span" 
+                sx={{
+                  display: 'inline-block',
+                  ml: 1,
+                  bgcolor: theme.palette.secondary.main,
+                  color: 'white',
+                  fontSize: '0.7rem',
+                  px: 0.7,
+                  py: 0.2,
+                  borderRadius: '10px',
+                  verticalAlign: 'middle'
+                }}
+              >
+                LOOP
+              </Box>
+            )}
           </Typography>
           
           <Box sx={{ display: 'flex', alignItems: 'center', mt: 'auto', mb: 1 }}>
             {/* Only show controls if not in drag mode */}
             {!dragMode ? (
               <>
-                {/* Play/Pause Button with improved tooltip */}
+                {/* Play/Pause Button with improved tooltip and larger touch area */}
                 <Tooltip title={isPlaying ? "Pause" : "Play"}>
                   <IconButton 
                     onClick={() => handlePlayPause(sound)}
                     color={isPlaying ? "secondary" : "primary"}
                     size="large"
                     aria-label={isPlaying ? "Pause" : "Play"}
+                    sx={{ padding: '12px' }} // Larger touch area for iOS
                   >
                     {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
                   </IconButton>
                 </Tooltip>
                 
-                {/* Loop Button with improved tooltip */}
+                {/* Loop Button with improved tooltip and larger touch area */}
                 <Tooltip title={isLooping ? "Looping On" : "Loop Sound"}>
                   <IconButton 
                     onClick={() => handleLoopToggle(sound)}
                     color={isLooping ? "secondary" : "default"}
                     size="large"
                     aria-label={isLooping ? "Looping On" : "Loop Sound"}
+                    sx={{ padding: '12px' }} // Larger touch area for iOS
                   >
-                    <LoopIcon />
+                    <Badge 
+                      variant="dot" 
+                      color="secondary"
+                      invisible={!isLooping}
+                    >
+                      <LoopIcon />
+                    </Badge>
                   </IconButton>
                 </Tooltip>
                 
-                {/* Volume Button with improved tooltip */}
+                {/* Volume Button with improved tooltip and larger touch area */}
                 <Tooltip title="Adjust Volume">
                   <IconButton 
                     onClick={(e) => toggleVolumeControls(sound.id, e)}
                     color={showControls ? "secondary" : "default"}
                     size="large"
                     aria-label="Adjust Volume"
+                    sx={{ padding: '12px' }} // Larger touch area for iOS
                   >
                     {getVolumeIcon(sound.volume || 0.7)}
                   </IconButton>
                 </Tooltip>
                 
-                {/* Delete Button with improved tooltip */}
+                {/* Delete Button with improved tooltip and larger touch area */}
                 <Tooltip title="Delete Sound">
                   <IconButton 
                     onClick={() => handleDeleteSound(sound.id)}
                     color="error"
                     size="small"
                     aria-label="Delete Sound"
+                    sx={{ padding: '8px' }} // Larger touch area for iOS
                   >
                     <DeleteIcon />
                   </IconButton>
@@ -1385,7 +1510,11 @@ export default function App() {
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundAttachment: 'fixed',
-        p: 2
+        p: { xs: 1, sm: 2 }, // Reduced padding on mobile
+        WebkitTapHighlightColor: 'transparent', // Prevent iOS tap highlight
+        touchAction: 'manipulation', // Optimize for touch
+        WebkitOverflowScrolling: 'touch', // Better iOS scrolling
+        overscrollBehavior: 'none', // Prevent scroll bounce on iOS
       }}>
         <Container maxWidth="lg">
           <Paper sx={{
@@ -1393,6 +1522,7 @@ export default function App() {
             overflow: 'hidden',
             boxShadow: 3,
             position: 'relative',
+            WebkitTapHighlightColor: 'transparent', // Remove tap highlight on iOS
           }}>
             {/* Header */}
             <AppBar position="static" color="primary" elevation={0} 
@@ -1402,19 +1532,23 @@ export default function App() {
                 borderTopRightRadius: 12,
               }}
             >
-              <Toolbar sx={{ justifyContent: 'space-between', px: 3, py: { xs: 1.5, sm: 2 } }}>
+              <Toolbar sx={{ 
+                justifyContent: 'space-between', 
+                px: { xs: 2, sm: 3 }, // Responsive padding
+                py: { xs: 1, sm: 2 }, // Shorter on mobile for more content space
+              }}>
                 <Typography 
                   variant="h1" 
                   sx={{ 
-                    fontSize: { xs: '1.8rem', sm: '2.5rem' }, 
-                    letterSpacing: 2,
+                    fontSize: { xs: '1.5rem', sm: '2.5rem' }, // Even smaller on mobile
+                    letterSpacing: { xs: 1, sm: 2 },
                     textShadow: '0 2px 4px rgba(0,0,0,0.2)',
                   }}
                 >
                   Fantasy Soundboard
                 </Typography>
                 <Box>
-                  {/* Toggle drag mode button */}
+                  {/* Toggle drag mode button - Increased hit area for iOS */}
                   {sounds.length > 0 && (
                     <Tooltip title={dragMode ? "Exit Organize Mode" : "Organize Sounds"}>
                       <IconButton 
@@ -1422,6 +1556,7 @@ export default function App() {
                         onClick={toggleDragMode}
                         sx={{ 
                           mr: 1,
+                          padding: { xs: '12px', sm: '8px' }, // Larger touch target on mobile
                           backgroundColor: dragMode ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)',
                           '&:hover': { 
                             backgroundColor: dragMode ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.2)',
@@ -1439,6 +1574,7 @@ export default function App() {
                       color="inherit" 
                       onClick={() => setConfirmReset(true)} 
                       sx={{ 
+                        padding: { xs: '12px', sm: '8px' }, // Larger touch target on mobile
                         backgroundColor: 'rgba(255,255,255,0.1)',
                         '&:hover': { 
                           backgroundColor: 'rgba(255,255,255,0.2)',
@@ -1696,8 +1832,28 @@ export default function App() {
             }}
           >
             <Box sx={{ p: 2 }}>
-              <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <TuneIcon /> Volume Mixer
+              <Typography variant="h6" sx={{ 
+                mb: 1, 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'space-between', 
+                gap: 1 
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <TuneIcon /> Volume Mixer
+                </Box>
+                {/* Mobile-friendly close button */}
+                <IconButton 
+                  onClick={() => setDrawerOpen(false)}
+                  aria-label="Close volume mixer"
+                  sx={{ 
+                    display: { xs: 'flex', sm: 'none' },
+                    bgcolor: 'rgba(0,0,0,0.05)',
+                    '&:hover': { bgcolor: 'rgba(0,0,0,0.1)' }
+                  }}
+                >
+                  <CloseIcon />
+                </IconButton>
               </Typography>
               
               {/* Master volume control */}
@@ -1841,6 +1997,25 @@ export default function App() {
                             }}>
                               {sound.name}
                               {isPaused && <span style={{ marginLeft: '4px', fontSize: '80%', color: '#777' }}>(Paused)</span>}
+                              {/* Loop indicator in mixer */}
+                              {looping[id] && (
+                                <Box 
+                                  component="span" 
+                                  sx={{
+                                    display: 'inline-block',
+                                    ml: 1,
+                                    bgcolor: theme.palette.secondary.main,
+                                    color: 'white',
+                                    fontSize: '0.6rem',
+                                    px: 0.5,
+                                    py: 0.1,
+                                    borderRadius: '8px',
+                                    verticalAlign: 'middle'
+                                  }}
+                                >
+                                  LOOP
+                                </Box>
+                              )}
                             </Typography>
                             
                             {/* Play/Pause Button */}
@@ -1924,6 +2099,25 @@ export default function App() {
                   sx={{ width: '100%' }}
                 >
                   Stop All Sounds
+                </Button>
+              </Box>
+              
+              {/* Mobile close button at the bottom */}
+              <Box sx={{ 
+                mt: 2, 
+                display: { xs: 'block', sm: 'none' },
+                position: 'sticky',
+                bottom: 0,
+                pb: 2
+              }}>
+                <Button 
+                  variant="contained" 
+                  color="primary"
+                  startIcon={<CloseIcon />}
+                  onClick={() => setDrawerOpen(false)}
+                  sx={{ width: '100%' }}
+                >
+                  Close Mixer
                 </Button>
               </Box>
             </Box>

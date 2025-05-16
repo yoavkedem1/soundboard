@@ -8,7 +8,10 @@
     "dev:clean": "npx kill-port 5173 5174 4500-5500 && vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && gh-pages -d dist"
+    "deploy": "npm run build && gh-pages -d dist",
+    "test": "node scripts/test-app.js",
+    "validate": "node scripts/validate-app.js",
+    "fix:server": "bash scripts/fix-server.sh"
   },
   "dependencies": {
     "@emotion/react": "^11.11.0",
@@ -26,8 +29,10 @@
     "@types/react": "^18.2.6",
     "@types/react-dom": "^18.2.4",
     "@vitejs/plugin-react": "^4.0.0",
+    "chalk": "^5.4.1",
     "gh-pages": "^5.0.0",
     "kill-port": "^2.0.1",
+    "puppeteer": "^24.8.2",
     "vite": "^4.3.5"
   }
 }

@@ -26,8 +26,24 @@ const getRandomPort = () => {
   }
   
   // Use a random port between 4500-5500 by default
-  return 4500 + Math.floor(Math.random() * 1000);
+  // Avoiding all common ports that might cause conflicts
+  const basePort = 4500;
+  const range = 1000;
+  const randomPort = basePort + Math.floor(Math.random() * range);
+  
+  // Explicitly avoid common ports that might be in use
+  const reservedPorts = [5173, 5174, 5175, 3000, 8080, 8000, 8081, 8888];
+  if (reservedPorts.includes(randomPort)) {
+    return randomPort + 7; // Add larger offset to avoid adjacent ports
+  }
+  
+  return randomPort;
 };
+
+// Generate different ports for main server and HMR
+// Ensure they're significantly different to avoid any overlap
+const mainPort = getRandomPort();
+const hmrPort = mainPort + 237; // Use a prime number offset to reduce chance of conflicts
 
 export default defineConfig({
   plugins: [react()],
@@ -38,10 +54,20 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html')
+      },
+      output: {
+        manualChunks: {
+          // Create a vendor bundle to improve caching
+          vendor: ['react', 'react-dom', 'react-beautiful-dnd'],
+        }
       }
     },
     // Force Vite to copy assets with the original paths
-    assetsInlineLimit: 0
+    assetsInlineLimit: 0,
+    target: 'es2015',
+    // Safari/iOS should handle these well
+    cssCodeSplit: true,
+    sourcemap: true,
   },
   resolve: {
     alias: {
@@ -49,38 +75,56 @@ export default defineConfig({
     }
   },
   server: {
-    // Use random port to avoid conflicts
-    port: getRandomPort(),
-    strictPort: false, // Try another port if the port is in use
-    host: 'localhost', // Bind only to localhost
-    hmr: {
-      // Use a separate port for HMR to avoid conflicts
-      port: getRandomPort() + 1000,
-      // Don't try to reconnect forever, give up after 3 attempts
-      reconnect: 3,
-      // Disable overlay that can cause issues
-      overlay: false,
-    },
-    // Add this to properly close the previous server before starting a new one
+    // Force close existing connections to prevent "Listen has been called more than once" error
     force: true,
+    
+    // Use dynamic port allocation to avoid conflicts
+    port: mainPort,
+    strictPort: true, // Exit if port is in use rather than trying another one that might conflict
+    
+    // Separate HMR WebSocket port configuration
+    hmr: {
+      port: hmrPort, // Dedicated port for HMR WebSocket
+      protocol: 'ws', // Use WebSocket instead of wss for better compatibility
+      host: 'localhost', // Explicitly set host to avoid connection issues
+      clientPort: hmrPort, // Ensure client connects to the right port
+      timeout: 10000, // Extended timeout for spotty connections
+      overlay: false, // Disable error overlay to reduce interaction with iOS audio
+      // Allow reconnection but with limits
+      reconnect: 10000, // Reconnect timeout in ms
+    },
+    
+    // Optimize headers for better Safari/iOS performance
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Access-Control-Allow-Origin': '*',
+    },
+    
+    // Optimize for iOS/Safari
     watch: {
-      // Use polling for file changes with a longer interval to reduce CPU usage
-      usePolling: false,
-      interval: 1000,
-      // Ignore these files to avoid unnecessary rebuilds
-      ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**']
-    }
+      usePolling: false, // Don't use polling on iOS to save battery
+    },
+    
+    // Handle Safari/iOS touch events properly
+    middlewareMode: false,
+    
+    // Exit process on server shutdown
+    closeOnExit: true,
   },
   optimizeDeps: {
     // Force Vite to scan all files when processing dependencies
     force: false,
     // Don't exclude node_modules from optimization
-    exclude: []
+    exclude: [],
+    // Include polyfills for better browser support
+    include: ['react', 'react-dom', 'react-beautiful-dnd']
   },
   // Don't try to automatically open browser
   open: false,
   // Define custom environment variables that can be accessed in the app
   define: {
-    'import.meta.env.VITE_APP_PORT': JSON.stringify(getRandomPort())
+    'import.meta.env.VITE_APP_PORT': JSON.stringify(mainPort),
+    'import.meta.env.VITE_HMR_PORT': JSON.stringify(hmrPort),
   }
 }); 
