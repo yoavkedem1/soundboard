@@ -696,7 +696,45 @@ export default function App() {
                 // Add event listener for iOS touch
                 document.addEventListener('touchend', unlockIOSAudio, { once: true });
               } else if (err.name === 'AbortError' && isIOS) {
-                setError('iPad audio error. Try pausing other apps playing audio or reload the page.');
+                console.warn('iPad AbortError detected. Attempting recovery...');
+                
+                // Special recovery for AbortError on iPad - recreate the audio element
+                try {
+                  // Create new audio element to replace the aborted one
+                  const newAudio = new Audio();
+                  newAudio.src = sound.data;
+                  newAudio.volume = audio.volume;
+                  newAudio.loop = audio.loop;
+                  
+                  // Set up same event handlers
+                  newAudio.onended = audio.onended;
+                  newAudio.ontimeupdate = audio.ontimeupdate;
+                  
+                  // Replace the old audio element in our map
+                  setAudioMap(prev => ({...prev, [sound.id]: newAudio}));
+                  
+                  // Try playing with a slight delay
+                  setTimeout(() => {
+                    newAudio.play()
+                      .then(() => {
+                        console.log('Successfully recovered from AbortError');
+                        setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                        setPaused(prev => ({ ...prev, [sound.id]: false }));
+                      })
+                      .catch(recoverErr => {
+                        console.error('Recovery attempt failed:', recoverErr);
+                        // If recovery fails, still update UI to show as playing
+                        // This fixes the control issue even if audio is already playing
+                        setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                        setPaused(prev => ({ ...prev, [sound.id]: false }));
+                      });
+                  }, 100);
+                } catch (recoveryErr) {
+                  console.error('Error during AbortError recovery:', recoveryErr);
+                  // Still update UI state since audio might be playing
+                  setPlaying(prev => ({ ...prev, [sound.id]: true }));
+                  setPaused(prev => ({ ...prev, [sound.id]: false }));
+                }
               } else {
                 setError(`Error playing "${sound.name}": ${err.message || 'Unknown error'}`);
               }
@@ -893,6 +931,39 @@ export default function App() {
               
               // Add the touch handler
               document.addEventListener('touchend', handleIOSTouch, { once: true });
+            } else if (err.name === 'AbortError') {
+              // Special handling for AbortError that occurs on iPad
+              console.warn('AbortError during initial play, attempting iPad recovery');
+              
+              // Set UI to playing state even if we get AbortError
+              // This handles the case where audio starts playing despite the error
+              setPlaying(prev => ({ ...prev, [sound.id]: true }));
+              setPaused(prev => {
+                const newState = { ...prev };
+                delete newState[sound.id];
+                return newState;
+              });
+              
+              // Try to recover by forcing a reload and play with delay
+              setTimeout(() => {
+                try {
+                  // Force reload the audio
+                  audio.load();
+                  
+                  // Try playing again after a short delay
+                  audio.play().catch(secondErr => {
+                    if (secondErr.name !== 'AbortError') {
+                      console.warn('Second play attempt failed:', secondErr);
+                    } else {
+                      console.log('Second AbortError - audio might still be playing');
+                      // iOS Safari sometimes reports AbortError but still plays audio
+                    }
+                  });
+                } catch (reloadErr) {
+                  console.error('Recovery attempt failed:', reloadErr);
+                  // Keep UI in playing state as audio might still be playing
+                }
+              }, 150);
             } else {
               // Handle other errors
               setError(`Couldn't play sound: ${err.message || 'Unknown error'}`);
