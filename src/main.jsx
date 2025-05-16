@@ -1,6 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import App from './App';
+import TestIndex from './tests/TestIndex';
+import IPadTestRunner from './tests/iPadTestRunner';
 import CssBaseline from '@mui/material/CssBaseline';
 import { initializeDatabase } from './db';
 
@@ -14,11 +17,27 @@ async function startApp() {
     // Initialize database first
     await initializeDatabase();
     
+    // Create the router with routes for the main app and test suites
+    const router = createBrowserRouter([
+      {
+        path: '/',
+        element: <App />,
+      },
+      {
+        path: '/tests',
+        element: <TestIndex />,
+      },
+      {
+        path: '/tests/ipad',
+        element: <IPadTestRunner />,
+      },
+    ]);
+
     // Render the app
     ReactDOM.createRoot(document.getElementById('root')).render(
       <React.StrictMode>
         <CssBaseline />
-        <App />
+        <RouterProvider router={router} />
       </React.StrictMode>
     );
   } catch (err) {

@@ -322,6 +322,10 @@ export default function App() {
   const audioSourcesRef = useRef({});
   const dataRetryRef = useRef(null);
   
+  // Add WebAudio gain nodes for iPad volume control
+  const audioGainNodes = useRef({});
+  const audioSources = useRef({});
+  
   // Function to cancel all loading operations
   const cancelLoadingOperations = (exceptId = null) => {
     Object.entries(loadingOperations).forEach(([id, cancel]) => {
@@ -606,6 +610,17 @@ export default function App() {
           console.warn('Large audio files may fail on iOS devices');
           setError(`Warning: This ${sound.fileSize}MB file may be too large for iPad. If playback fails, try using smaller audio files (under 10MB).`);
           setTimeout(() => handleErrorClose(), 5000);
+        }
+      }
+      
+      // For iPad, ensure AudioContext is running to enable WebAudio gain node volume control
+      if (isIOS && audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        console.log('Resuming suspended AudioContext for iPad volume control');
+        try {
+          await audioContextRef.current.resume();
+          console.log(`AudioContext resumed: ${audioContextRef.current.state}`);
+        } catch (err) {
+          console.warn('Failed to resume AudioContext:', err);
         }
       }
       
@@ -1251,7 +1266,7 @@ export default function App() {
     });
   };
   
-  // Handle volume change with iOS-specific fixes
+  // Handle volume change with WebAudio API for iPad
   const handleVolumeChange = (sound, newValue) => {
     const id = sound.id;
     
@@ -1280,55 +1295,86 @@ export default function App() {
       try {
         // iPad requires special handling for volume changes
         if (isIOS) {
-          // Log complete audio element state for debugging
-          console.log(`iOS audio state: paused=${audio.paused}, muted=${audio.muted}, currentTime=${audio.currentTime}, volume=${audio.volume}`);
-          
-          // Direct approach for iOS - restart playback to apply volume correctly
-          if (effectiveVolume <= 0.01) {
-            // For mute, set both properties
-            console.log(`iOS: Muting ${sound.name}`);
-            audio.muted = true;
-            audio.volume = 0;
-          } else {
-            // For iOS volume change, we use a much more aggressive approach
-            const wasPlaying = !audio.paused;
-            const currentPosition = audio.currentTime;
-            
-            // Set volume first then unmute (opposite order from normal)
-            const clampedVolume = Math.max(0.1, Math.min(1, effectiveVolume)); // Minimum 0.1 to ensure iOS registers it
-            
-            console.log(`iOS volume change: Applying ${clampedVolume} with playback reset`);
-            
-            // Set volume first
-            audio.volume = clampedVolume;
-            audio.muted = false;
-            
-            if (wasPlaying) {
-              // On iOS, sometimes we need to restart playback to apply volume
+          // Use WebAudio API for iOS volume control
+          if (audioContextRef.current && audioContextRef.current.state === 'running') {
+            // Initialize WebAudio nodes if not already created for this sound
+            if (!audioGainNodes.current[id]) {
+              console.log(`Creating new gain node for sound ${sound.name}`);
               try {
-                console.log(`iOS: Restarting playback at position ${currentPosition}`);
-                audio.pause();
+                // Create a media element source from the audio element
+                const source = audioContextRef.current.createMediaElementSource(audio);
                 
-                // Reset the audio with new volume settings
-                setTimeout(() => {
-                  try {
-                    // Restore position and playback
-                    audio.currentTime = currentPosition;
-                    const playPromise = audio.play();
-                    
-                    if (playPromise !== undefined) {
-                      playPromise.catch(err => {
-                        console.warn('iOS play after volume change failed:', err);
-                      });
-                    }
-                  } catch (restartErr) {
-                    console.warn('iOS restart failed:', restartErr);
+                // Create a gain node for volume control
+                const gainNode = audioContextRef.current.createGain();
+                
+                // Connect the chain: source -> gain -> destination
+                source.connect(gainNode);
+                gainNode.connect(audioContextRef.current.destination);
+                
+                // Store references
+                audioGainNodes.current[id] = gainNode;
+                audioSources.current[id] = source;
+                
+                console.log(`WebAudio chain created for ${sound.name}`);
+              } catch (err) {
+                // If we get an error (possibly because source is already connected)
+                console.warn(`Error creating WebAudio chain for ${sound.name}:`, err);
+                
+                // Fall back to direct volume control with restart approach
+                if (effectiveVolume <= 0.01) {
+                  audio.muted = true;
+                  audio.volume = 0;
+                } else {
+                  const wasPlaying = !audio.paused;
+                  const currentPosition = audio.currentTime;
+                  
+                  // Set volume first then unmute
+                  const clampedVolume = Math.max(0.1, Math.min(1, effectiveVolume));
+                  audio.volume = clampedVolume;
+                  audio.muted = false;
+                  
+                  if (wasPlaying) {
+                    // Force a restart to apply volume
+                    audio.pause();
+                    setTimeout(() => {
+                      audio.currentTime = currentPosition;
+                      audio.play().catch(err => console.warn('Play failed:', err));
+                    }, 50);
                   }
-                }, 50);
-              } catch (pauseErr) {
-                console.warn('iOS pause failed:', pauseErr);
+                }
+                return;
               }
             }
+            
+            // Use gain node to control volume
+            const gainNode = audioGainNodes.current[id];
+            if (gainNode) {
+              // Set the gain value (volume)
+              if (effectiveVolume <= 0.01) {
+                gainNode.gain.value = 0;
+                audio.muted = true; // Also mute for good measure
+              } else {
+                // Unmute if needed
+                audio.muted = false;
+                
+                // Set gain value - this controls the volume in WebAudio API
+                const now = audioContextRef.current.currentTime;
+                
+                // Smooth transition to new volume
+                gainNode.gain.cancelScheduledValues(now);
+                gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+                gainNode.gain.linearRampToValueAtTime(effectiveVolume, now + 0.1);
+                
+                console.log(`Set gain for ${sound.name} to ${effectiveVolume}`);
+              }
+            } else {
+              console.warn(`No gain node found for ${sound.name}`);
+              // Fall back to direct control with restart approach
+              fallbackVolumeControl(audio, sound.name, effectiveVolume);
+            }
+          } else {
+            console.log(`Audio context not ready (${audioContextRef.current?.state}), using direct volume control`);
+            fallbackVolumeControl(audio, sound.name, effectiveVolume);
           }
         } else {
           // Standard handling for non-iOS devices
@@ -1345,6 +1391,10 @@ export default function App() {
         }
       } catch (err) {
         console.error(`Error setting volume for ${sound.name}:`, err);
+        // Last resort fallback
+        if (audio) {
+          fallbackVolumeControl(audio, sound.name, effectiveVolume);
+        }
       }
     }
     
@@ -1352,6 +1402,52 @@ export default function App() {
     saveSound(updatedSound).catch(err => {
       console.error("Failed to save volume setting:", err);
     });
+  };
+  
+  // Fallback volume control function for iPad when WebAudio API is not available
+  const fallbackVolumeControl = (audio, soundName, effectiveVolume) => {
+    // Log complete audio state for debugging
+    console.log(`Fallback volume control for ${soundName}: paused=${audio.paused}, muted=${audio.muted}, volume=${audio.volume}`);
+    
+    if (effectiveVolume <= 0.01) {
+      console.log(`Muting ${soundName}`);
+      audio.muted = true;
+      audio.volume = 0;
+      return;
+    }
+    
+    // For actual volume changes, we need to restart playback to apply volume on iPad
+    const wasPlaying = !audio.paused;
+    const currentPosition = audio.currentTime;
+    
+    // Set volume first then unmute
+    const clampedVolume = Math.max(0.1, Math.min(1, effectiveVolume));
+    
+    console.log(`Setting volume for ${soundName} to ${clampedVolume} using fallback method`);
+    
+    // Try multiple approaches for iPad compatibility
+    audio.volume = clampedVolume;
+    audio.muted = false;
+    
+    if (wasPlaying) {
+      // On iOS, sometimes we need to restart playback to apply volume
+      try {
+        console.log(`Restarting playback at position ${currentPosition}`);
+        audio.pause();
+        
+        // Reset and play
+        setTimeout(() => {
+          try {
+            audio.currentTime = currentPosition;
+            audio.play().catch(err => console.warn('Play after volume change failed:', err));
+          } catch (restartErr) {
+            console.warn('Restart failed:', restartErr);
+          }
+        }, 50);
+      } catch (pauseErr) {
+        console.warn('Pause failed:', pauseErr);
+      }
+    }
   };
   
   // Add keyboard support for volume
@@ -1764,7 +1860,7 @@ export default function App() {
     );
   };
   
-  // Apply master volume to all playing sounds
+  // Apply master volume to all playing sounds using WebAudio when possible
   useEffect(() => {
     // Apply master volume to all currently playing audio elements
     Object.entries(audioMap).forEach(([id, audio]) => {
@@ -1778,53 +1874,31 @@ export default function App() {
             
             console.log(`Master volume changed: Applying to ${sound.name}, base vol=${soundVolume}, master=${masterVolume}, effective=${effectiveVolume}`);
             
-            // iOS-specific volume handling
-            if (isIOS) {
-              // Force true muting for zero volumes
-              if (masterVolume <= 0.01 || effectiveVolume <= 0.01) {
-                console.log(`iOS: Muting ${sound.name}`);
-                
-                // For iOS, we need to pause and restart the audio to apply volume changes reliably
-                const wasPlaying = !audio.paused;
-                const currentTime = audio.currentTime;
-                
-                // Special muting approach for iOS
-                audio.muted = true;
-                audio.volume = 0;
-                
-                // If the audio was playing, need to pause/play to apply volume change
-                if (wasPlaying && audio.readyState >= 2) {
-                  audio.pause();
-                  // Use a small delay before restarting
-                  setTimeout(() => {
-                    try {
-                      audio.currentTime = currentTime;
-                      audio.play().catch(err => console.warn('iOS play after mute failed:', err));
-                    } catch (err) {
-                      console.warn('iOS restart after mute failed:', err);
-                    }
-                  }, 50);
-                }
+            // Check if we have a gain node for this sound
+            if (isIOS && audioGainNodes.current[id] && audioContextRef.current?.state === 'running') {
+              // Use WebAudio API for reliable volume control on iOS
+              const gainNode = audioGainNodes.current[id];
+              
+              // Apply volume through gain node
+              if (effectiveVolume <= 0.01) {
+                // For muting
+                gainNode.gain.value = 0;
+                audio.muted = true; // For good measure
               } else {
-                // For iOS, setting volume requires special handling
-                try {
-                  // Unmute first, then set volume with slight delay
-                  audio.muted = false;
-                  
-                  // Need a slight delay for iOS to process the unmute
-                  setTimeout(() => {
-                    try {
-                      const clampedVolume = Math.max(0, Math.min(1, effectiveVolume));
-                      audio.volume = clampedVolume;
-                      console.log(`iOS: Set volume for ${sound.name} to ${clampedVolume}`);
-                    } catch (err) {
-                      console.warn(`iOS volume set failed:`, err);
-                    }
-                  }, 20);
-                } catch (err) {
-                  console.warn(`iOS volume handling error:`, err);
-                }
+                // For volume change
+                audio.muted = false;
+                
+                // Smooth transition
+                const now = audioContextRef.current.currentTime;
+                gainNode.gain.cancelScheduledValues(now);
+                gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+                gainNode.gain.linearRampToValueAtTime(effectiveVolume, now + 0.1);
+                
+                console.log(`Set master gain for ${sound.name} to ${effectiveVolume} via WebAudio`);
               }
+            } else if (isIOS) {
+              // Fallback to our specialized iOS volume control
+              fallbackVolumeControl(audio, sound.name, effectiveVolume);
             } else {
               // Normal handling for non-iOS
               // Force true muting when master volume is near zero
@@ -1846,6 +1920,18 @@ export default function App() {
           }
         } catch (err) {
           console.warn(`Error adjusting volume for sound ${id}:`, err);
+          
+          // Last resort fallback
+          try {
+            if (isIOS && audio) {
+              const sound = sounds.find(s => s.id === id);
+              const soundVolume = sound?.volume || 0.7;
+              const effectiveVolume = soundVolume * masterVolume;
+              fallbackVolumeControl(audio, sound?.name || id, effectiveVolume);
+            }
+          } catch (fallbackErr) {
+            console.error("Fallback volume control failed:", fallbackErr);
+          }
         }
       }
     });
