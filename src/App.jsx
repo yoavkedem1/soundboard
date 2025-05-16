@@ -501,6 +501,13 @@ export default function App() {
       setSounds(loadedSounds);
       setGroups(loadedGroups);
       
+      // Initialize volume state for each sound
+      const initialVolumes = {};
+      loadedSounds.forEach(sound => {
+        initialVolumes[sound.id] = sound.volume !== undefined ? sound.volume : 0.7;
+      });
+      setVolumes(initialVolumes);
+      
       // Initialize audio context if sounds were loaded but only on user interaction
       if (loadedSounds.length > 0) {
         const setupAudioForSounds = () => {
@@ -1149,8 +1156,16 @@ export default function App() {
   const handleVolumeChange = (sound, newValue) => {
     const id = sound.id;
     
+    if (!sound) {
+      console.error("Cannot change volume: invalid sound object");
+      return;
+    }
+    
     // Update the sound's base volume
     const updatedSound = { ...sound, volume: newValue };
+    
+    // Set volumes state first for UI response
+    setVolumes(prev => ({...prev, [id]: newValue}));
     
     // Update sounds state to reflect new volume
     setSounds(prev => prev.map(s => s.id === id ? updatedSound : s));
@@ -1161,15 +1176,20 @@ export default function App() {
     // Update audio if playing
     const audio = audioMap[id];
     if (audio) {
-      // Force true muting for very low volumes (0-1%)
-      if (effectiveVolume <= 0.01) {
-        console.log(`Setting ${sound.name} to truly muted`);
-        audio.muted = true;
-        audio.volume = 0;
-      } else {
-        audio.muted = false;
-        audio.volume = Math.max(0, Math.min(1, effectiveVolume));
-        console.log(`Setting ${sound.name} volume to ${audio.volume} (effective: ${effectiveVolume})`);
+      try {
+        // Force true muting for very low volumes (0-1%)
+        if (effectiveVolume <= 0.01) {
+          console.log(`Setting ${sound.name} to truly muted`);
+          audio.muted = true;
+          audio.volume = 0;
+        } else {
+          audio.muted = false;
+          const clampedVolume = Math.max(0, Math.min(1, effectiveVolume));
+          audio.volume = clampedVolume;
+          console.log(`Setting ${sound.name} volume to ${audio.volume} (effective: ${effectiveVolume})`);
+        }
+      } catch (err) {
+        console.error(`Error setting volume for ${sound.name}:`, err);
       }
     }
     
@@ -1294,6 +1314,7 @@ export default function App() {
     const position = audioPositions[sound.id] || 0;
     const progress = calculateProgress(position);
     const showControls = showVolumeControls[sound.id];
+    const soundVolume = sound.volume !== undefined ? sound.volume : 0.7; // Ensure volume is always available
     
     const soundContent = (
       <Paper 
@@ -1490,7 +1511,7 @@ export default function App() {
                 
                 <Slider
                   size="small"
-                  value={sound.volume * 100}
+                  value={soundVolume * 100}
                   onChange={(e, newValue) => handleVolumeChange(sound, newValue / 100)}
                   aria-labelledby="volume-slider"
                   valueLabelDisplay="auto"
@@ -2302,7 +2323,6 @@ export default function App() {
                   <input
                     type="file"
                     accept="audio/mp3,audio/mpeg,audio/wav,audio/ogg,audio/*"
-                    capture={isiPad && "filesystem"}
                     onChange={(e) => {
                       try {
                         const selectedFile = e.target.files?.[0];
@@ -2347,7 +2367,7 @@ export default function App() {
                 {/* iOS helper text */}
                 {isiPad && (
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', textAlign: 'center' }}>
-                    Tap to select from your files. On iPad, use the Files app to access your sound files.
+                    Tap to select from your files. For iPad, tap "Browse" to select from Files app instead of recording video.
                   </Typography>
                 )}
               </Box>
