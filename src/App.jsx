@@ -1251,7 +1251,7 @@ export default function App() {
     });
   };
   
-  // Handle volume change with improved muting
+  // Handle volume change with iOS-specific fixes
   const handleVolumeChange = (sound, newValue) => {
     const id = sound.id;
     
@@ -1265,7 +1265,7 @@ export default function App() {
     // Update the sound's base volume
     const updatedSound = { ...sound, volume: newValue };
     
-    // Set volumes state first for UI response
+    // Set volumes state first for immediate UI response
     setVolumes(prev => ({...prev, [id]: newValue}));
     
     // Update sounds state to reflect new volume
@@ -1278,31 +1278,57 @@ export default function App() {
     const audio = audioMap[id];
     if (audio) {
       try {
-        // Special handling for iOS devices which have volume quirks
+        // iPad requires special handling for volume changes
         if (isIOS) {
-          // On iOS, first try direct volume control
-          try {
-            // For iOS we need to ensure we're not hitting issues with timings
-            // Set muted state first
-            if (effectiveVolume <= 0.01) {
-              audio.muted = true;
-              audio.volume = 0;
-            } else {
-              // For iOS, order matters - unmute first, then set volume
-              audio.muted = false;
-              // Small delay to ensure mute state is applied
-              setTimeout(() => {
-                try {
-                  const clampedVolume = Math.max(0, Math.min(1, effectiveVolume));
-                  audio.volume = clampedVolume;
-                  console.log(`iOS: Set volume for ${sound.name} to ${clampedVolume}`);
-                } catch (volErr) {
-                  console.error(`iOS: Failed to set volume: ${volErr}`);
-                }
-              }, 10);
+          // Log complete audio element state for debugging
+          console.log(`iOS audio state: paused=${audio.paused}, muted=${audio.muted}, currentTime=${audio.currentTime}, volume=${audio.volume}`);
+          
+          // Direct approach for iOS - restart playback to apply volume correctly
+          if (effectiveVolume <= 0.01) {
+            // For mute, set both properties
+            console.log(`iOS: Muting ${sound.name}`);
+            audio.muted = true;
+            audio.volume = 0;
+          } else {
+            // For iOS volume change, we use a much more aggressive approach
+            const wasPlaying = !audio.paused;
+            const currentPosition = audio.currentTime;
+            
+            // Set volume first then unmute (opposite order from normal)
+            const clampedVolume = Math.max(0.1, Math.min(1, effectiveVolume)); // Minimum 0.1 to ensure iOS registers it
+            
+            console.log(`iOS volume change: Applying ${clampedVolume} with playback reset`);
+            
+            // Set volume first
+            audio.volume = clampedVolume;
+            audio.muted = false;
+            
+            if (wasPlaying) {
+              // On iOS, sometimes we need to restart playback to apply volume
+              try {
+                console.log(`iOS: Restarting playback at position ${currentPosition}`);
+                audio.pause();
+                
+                // Reset the audio with new volume settings
+                setTimeout(() => {
+                  try {
+                    // Restore position and playback
+                    audio.currentTime = currentPosition;
+                    const playPromise = audio.play();
+                    
+                    if (playPromise !== undefined) {
+                      playPromise.catch(err => {
+                        console.warn('iOS play after volume change failed:', err);
+                      });
+                    }
+                  } catch (restartErr) {
+                    console.warn('iOS restart failed:', restartErr);
+                  }
+                }, 50);
+              } catch (pauseErr) {
+                console.warn('iOS pause failed:', pauseErr);
+              }
             }
-          } catch (iosErr) {
-            console.warn(`iOS volume issue for ${sound.name}:`, iosErr);
           }
         } else {
           // Standard handling for non-iOS devices
@@ -1344,19 +1370,25 @@ export default function App() {
     
     const currentVolume = volumes[activeId] || 0.7;
     
-    // Handle keyboard events
+            // Handle keyboard events
     const handleKeyDown = (e) => {
       // Arrow up: Increase volume
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        const newVolume = Math.min(1, currentVolume + 0.05);
+        // For iOS, use larger increments to ensure changes are noticeable
+        const increment = isIOS ? 0.1 : 0.05;
+        const newVolume = Math.min(1, currentVolume + increment);
+        console.log(`Keyboard volume up: ${currentVolume} → ${newVolume}`);
         handleVolumeChange(sound, newVolume);
       }
       
       // Arrow down: Decrease volume
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        const newVolume = Math.max(0, currentVolume - 0.05);
+        // For iOS, use larger increments to ensure changes are noticeable
+        const increment = isIOS ? 0.1 : 0.05;
+        const newVolume = Math.max(0, currentVolume - increment);
+        console.log(`Keyboard volume down: ${currentVolume} → ${newVolume}`);
         handleVolumeChange(sound, newVolume);
       }
       
@@ -1746,20 +1778,70 @@ export default function App() {
             
             console.log(`Master volume changed: Applying to ${sound.name}, base vol=${soundVolume}, master=${masterVolume}, effective=${effectiveVolume}`);
             
-            // Force true muting when master volume is near zero
-            if (masterVolume <= 0.01) {
-              console.log(`Setting master mute on ${sound.name}`);
-              audio.muted = true;
-              audio.volume = 0;
-            } 
-            // Or when the effective volume is near zero
-            else if (effectiveVolume <= 0.01) {
-              console.log(`Setting effective mute on ${sound.name}`);
-              audio.muted = true;
-              audio.volume = 0;
+            // iOS-specific volume handling
+            if (isIOS) {
+              // Force true muting for zero volumes
+              if (masterVolume <= 0.01 || effectiveVolume <= 0.01) {
+                console.log(`iOS: Muting ${sound.name}`);
+                
+                // For iOS, we need to pause and restart the audio to apply volume changes reliably
+                const wasPlaying = !audio.paused;
+                const currentTime = audio.currentTime;
+                
+                // Special muting approach for iOS
+                audio.muted = true;
+                audio.volume = 0;
+                
+                // If the audio was playing, need to pause/play to apply volume change
+                if (wasPlaying && audio.readyState >= 2) {
+                  audio.pause();
+                  // Use a small delay before restarting
+                  setTimeout(() => {
+                    try {
+                      audio.currentTime = currentTime;
+                      audio.play().catch(err => console.warn('iOS play after mute failed:', err));
+                    } catch (err) {
+                      console.warn('iOS restart after mute failed:', err);
+                    }
+                  }, 50);
+                }
+              } else {
+                // For iOS, setting volume requires special handling
+                try {
+                  // Unmute first, then set volume with slight delay
+                  audio.muted = false;
+                  
+                  // Need a slight delay for iOS to process the unmute
+                  setTimeout(() => {
+                    try {
+                      const clampedVolume = Math.max(0, Math.min(1, effectiveVolume));
+                      audio.volume = clampedVolume;
+                      console.log(`iOS: Set volume for ${sound.name} to ${clampedVolume}`);
+                    } catch (err) {
+                      console.warn(`iOS volume set failed:`, err);
+                    }
+                  }, 20);
+                } catch (err) {
+                  console.warn(`iOS volume handling error:`, err);
+                }
+              }
             } else {
-              audio.muted = false;
-              audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+              // Normal handling for non-iOS
+              // Force true muting when master volume is near zero
+              if (masterVolume <= 0.01) {
+                console.log(`Setting master mute on ${sound.name}`);
+                audio.muted = true;
+                audio.volume = 0;
+              } 
+              // Or when the effective volume is near zero
+              else if (effectiveVolume <= 0.01) {
+                console.log(`Setting effective mute on ${sound.name}`);
+                audio.muted = true;
+                audio.volume = 0;
+              } else {
+                audio.muted = false;
+                audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+              }
             }
           }
         } catch (err) {
