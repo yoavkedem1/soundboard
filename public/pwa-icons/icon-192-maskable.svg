@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <!-- Maskable icons need a larger safe zone within the icon -->
+  <rect width="192" height="192" fill="#8b5a2b" />
+  <g fill="white" transform="scale(0.7) translate(41, 41)">
+    <path d="M96 56c-22.1 0-40 17.9-40 40s17.9 40 40 40 40-17.9 40-40-17.9-40-40-40zm0 68c-15.5 0-28-12.5-28-28s12.5-28 28-28 28 12.5 28 28-12.5 28-28 28z"/>
+    <rect x="92" y="32" width="8" height="24" rx="4" ry="4"/>
+    <rect x="92" y="136" width="8" height="24" rx="4" ry="4"/>
+    <rect x="32" y="92" width="24" height="8" rx="4" ry="4"/>
+    <rect x="136" y="92" width="24" height="8" rx="4" ry="4"/>
+  </g>
+</svg> 

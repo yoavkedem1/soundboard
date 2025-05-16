@@ -1,20 +1,13 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
 import { resolve } from 'path';
 
-// Get the GitHub repo name for GitHub Pages deployment
+// For GitHub Pages, always use /soundboard/ as the base path in production
 const getBase = () => {
-  // If there's a base path set in env vars, use that
-  if (process.env.BASE_PATH) {
-    return process.env.BASE_PATH;
+  if (process.env.NODE_ENV === 'production') {
+    return '/soundboard/';
   }
-
-  // For GitHub Pages deployment through GitHub Actions
-  if (process.env.GITHUB_REPOSITORY) {
-    return `/${process.env.GITHUB_REPOSITORY.split('/')[1]}/`;
-  }
-
-  // For local development
   return '/';
 };
 
@@ -46,8 +39,38 @@ const mainPort = getRandomPort();
 const hmrPort = mainPort + 237; // Use a prime number offset to reduce chance of conflicts
 
 export default defineConfig({
-  plugins: [react()],
-  base: getBase(),
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['fantasy-soundboard.svg', 'favicon.ico'],
+      manifest: {
+        name: 'Fantasy Soundboard',
+        short_name: 'Soundboard',
+        description: 'A fantasy-themed soundboard for tabletop role-playing games',
+        theme_color: '#8b5a2b',
+        icons: [
+          {
+            src: 'pwa-icons/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png'
+          },
+          {
+            src: 'pwa-icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png'
+          },
+          {
+            src: 'pwa-icons/icon-192-maskable.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable'
+          }
+        ]
+      }
+    })
+  ],
+  base: process.env.NODE_ENV === 'production' ? '/soundboard/' : '/',
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -57,8 +80,8 @@ export default defineConfig({
       },
       output: {
         manualChunks: {
-          // Create a vendor bundle to improve caching
-          vendor: ['react', 'react-dom', 'react-beautiful-dnd'],
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'mui-vendor': ['@mui/material', '@mui/icons-material']
         }
       }
     },
@@ -68,6 +91,7 @@ export default defineConfig({
     // Safari/iOS should handle these well
     cssCodeSplit: true,
     sourcemap: true,
+    chunkSizeWarningLimit: 1600,
   },
   resolve: {
     alias: {
@@ -80,7 +104,8 @@ export default defineConfig({
     
     // Use dynamic port allocation to avoid conflicts
     port: mainPort,
-    strictPort: true, // Exit if port is in use rather than trying another one that might conflict
+    strictPort: false,
+    host: true,
     
     // Separate HMR WebSocket port configuration
     hmr: {
@@ -104,6 +129,7 @@ export default defineConfig({
     // Optimize for iOS/Safari
     watch: {
       usePolling: false, // Don't use polling on iOS to save battery
+      ignored: ['!**/node_modules/your-package-name/**']
     },
     
     // Handle Safari/iOS touch events properly

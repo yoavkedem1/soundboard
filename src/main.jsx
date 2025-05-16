@@ -17,6 +17,12 @@ async function startApp() {
     // Initialize database first
     await initializeDatabase();
     
+    // Detect if we're running on GitHub Pages
+    const isGitHubPages = window.location.hostname.includes('github.io');
+    const basename = isGitHubPages ? '/soundboard' : '/';
+    
+    console.log(`App running with basename: ${basename}, on GitHub Pages: ${isGitHubPages}`);
+    
     // Create the router with routes for the main app and test suites
     const router = createBrowserRouter([
       {
@@ -31,7 +37,10 @@ async function startApp() {
         path: '/tests/ipad',
         element: <IPadTestRunner />,
       },
-    ]);
+    ], {
+      // Add basename for GitHub Pages compatibility
+      basename: basename,
+    });
 
     // Render the app
     ReactDOM.createRoot(document.getElementById('root')).render(
