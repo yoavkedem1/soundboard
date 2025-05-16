@@ -164,6 +164,9 @@ function fileToDataURL(file) {
 
 const predefinedCategories = ['Ambience', 'Combat', 'Music', 'Voices', 'Special Effects'];
 
+// Check if the device is running iOS
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
 // Sound-related emoji collection
 const emojiOptions = [
   '🔊', '🔈', '🔉', '🔇', '🎵', '🎶', '🎸', '🎺', '🎷', '🥁', 
@@ -2124,11 +2127,20 @@ export default function App() {
           </Drawer>
           
           {/* Add Sound Dialog */}
-          <Dialog open={addSoundOpen} onClose={handleAddSoundClose} maxWidth="sm" fullWidth
+          <Dialog 
+            open={addSoundOpen} 
+            onClose={handleAddSoundClose} 
+            maxWidth="sm" 
+            fullWidth
             PaperProps={{
               sx: {
                 borderRadius: 3,
-                boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+                boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                // Ensure better iOS dialog behavior
+                WebkitOverflowScrolling: 'touch',
+                overscrollBehavior: 'contain',
+                // Fix issues with iOS input handling
+                touchAction: 'pan-y'
               }
             }}
           >
@@ -2161,12 +2173,55 @@ export default function App() {
                   {newSound.file ? newSound.file.name : 'Upload Sound File'}
                   <input
                     type="file"
-                    accept="audio/*"
-                    hidden
-                    onChange={(e) => setNewSound({ ...newSound, file: e.target.files[0] })}
+                    accept="audio/mp3,audio/mpeg,audio/wav,audio/ogg,audio/*"
+                    capture={/iPad|iPhone|iPod/.test(navigator.userAgent) && "filesystem"}
+                    onChange={(e) => {
+                      try {
+                        const selectedFile = e.target.files?.[0];
+                        
+                        if (!selectedFile) {
+                          console.warn('No file selected or file selection was cancelled');
+                          return;
+                        }
+
+                        // Log file info for debugging
+                        console.log('File selected:', {
+                          name: selectedFile.name,
+                          size: selectedFile.size,
+                          type: selectedFile.type
+                        });
+
+                        // Update state with the selected file
+                        setNewSound(prev => ({ ...prev, file: selectedFile }));
+
+                        // Clear error if previously set
+                        if (error && error.includes('file')) {
+                          setError(null);
+                        }
+                      } catch (err) {
+                        console.error('Error selecting file:', err);
+                        setError(`File selection error: ${err.message}. Please try a different file or method.`);
+                      }
+                    }}
                     ref={fileInputRef}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: '100%',
+                      opacity: 0,
+                      cursor: 'pointer',
+                    }}
                   />
                 </Button>
+
+                {/* iOS helper text */}
+                {/iPad|iPhone|iPod/.test(navigator.userAgent) && (
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', textAlign: 'center' }}>
+                    Tap to select from your files. On iPad, use the Files app to access your sound files.
+                  </Typography>
+                )}
               </Box>
               
               <Grid container spacing={2}>
