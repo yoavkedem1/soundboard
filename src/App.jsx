@@ -169,35 +169,68 @@ function fileToDataURL(file) {
   });
 }
 
-// iOS specific audio initialization
+// iOS specific audio initialization - Improved
 function initializeIOSAudio() {
   return new Promise((resolve, reject) => {
     try {
       // Create a silent audio context
       const AudioContext = window.AudioContext || window.webkitAudioContext;
-      const audioContext = new AudioContext();
       
-      // Create and play a silent buffer to unlock audio
-      const silentBuffer = audioContext.createBuffer(1, 1, 22050);
-      const source = audioContext.createBufferSource();
-      source.buffer = silentBuffer;
-      source.connect(audioContext.destination);
-      
-      // iOS needs both start call and immediate resume
-      if (source.start) {
-        source.start(0);
-      } else {
-        source.noteOn(0);
+      if (!AudioContext) {
+        console.warn('AudioContext not supported on this device');
+        reject(new Error('AudioContext not supported'));
+        return;
       }
       
-      // Resume the context
-      audioContext.resume().then(() => {
-        console.log('iOS audio initialized successfully');
+      const audioContext = new AudioContext();
+      
+      // For iOS, we need to create and play a silent buffer to unlock audio
+      try {
+        const silentBuffer = audioContext.createBuffer(1, 1, 22050);
+        const source = audioContext.createBufferSource();
+        source.buffer = silentBuffer;
+        source.connect(audioContext.destination);
+        
+        // iOS needs both start call and immediate resume
+        if (source.start) {
+          source.start(0);
+        } else if (source.noteOn) {
+          source.noteOn(0);
+        }
+        
+        // Resume the context with timeout
+        const resumePromise = audioContext.resume();
+        
+        if (resumePromise && resumePromise.then) {
+          // Modern promise-based API
+          resumePromise.then(() => {
+            console.log('iOS audio initialized successfully');
+            resolve(audioContext);
+          }).catch(err => {
+            console.warn('iOS audio resume failed:', err);
+            // Still resolve with context as it might work for basic playback
+            resolve(audioContext);
+          });
+          
+          // Add timeout for iOS audio initialization
+          setTimeout(() => {
+            if (audioContext.state === 'suspended') {
+              console.warn('iOS audio initialization timeout, but continuing...');
+              resolve(audioContext);
+            }
+          }, 2000);
+        } else {
+          // Older callback-based approach
+          console.log('Using legacy iOS audio initialization');
+          setTimeout(() => {
+            resolve(audioContext);
+          }, 100);
+        }
+      } catch (bufferErr) {
+        console.warn('Error creating silent buffer for iOS:', bufferErr);
+        // Still try to resolve with the context
         resolve(audioContext);
-      }).catch(err => {
-        console.warn('iOS audio resume failed:', err);
-        reject(err);
-      });
+      }
     } catch (err) {
       console.error('iOS audio initialization error:', err);
       reject(err);
@@ -354,6 +387,7 @@ export default function App() {
   useEffect(() => {
     // Flag to track if component is mounted
     let mounted = true;
+    let setupHandlerAdded = false;
     
     // Function to create and unlock AudioContext
     const setupAudio = async () => {
@@ -370,25 +404,29 @@ export default function App() {
             // iOS specific WebAudio unlock
             const unlock = async () => {
               if (audioContextRef.current && mounted) {
-                // Create and play short silent buffer
-                const buffer = audioContextRef.current.createBuffer(1, 1, 22050);
-                const source = audioContextRef.current.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioContextRef.current.destination);
-                
-                // Play the silent sound (required for iOS)
-                if (source.start) {
-                  source.start(0);
-                } else {
-                  source.noteOn(0);
+                try {
+                  // Create and play short silent buffer
+                  const buffer = audioContextRef.current.createBuffer(1, 1, 22050);
+                  const source = audioContextRef.current.createBufferSource();
+                  source.buffer = buffer;
+                  source.connect(audioContextRef.current.destination);
+                  
+                  // Play the silent sound (required for iOS)
+                  if (source.start) {
+                    source.start(0);
+                  } else {
+                    source.noteOn(0);
+                  }
+                  
+                  // Resume context after the silent play attempt
+                  if (audioContextRef.current.state === 'suspended') {
+                    await audioContextRef.current.resume();
+                  }
+                  
+                  console.log('iOS audio unlock attempt complete, state:', audioContextRef.current.state);
+                } catch (unlockErr) {
+                  console.warn('iOS audio unlock failed:', unlockErr);
                 }
-                
-                // Resume context after the silent play attempt
-                if (audioContextRef.current.state === 'suspended') {
-                  await audioContextRef.current.resume();
-                }
-                
-                console.log('iOS audio unlock attempt complete, state:', audioContextRef.current.state);
               }
             };
             
@@ -408,52 +446,49 @@ export default function App() {
     
     // Add event listeners for user interaction - iOS compatible
     const setupAudioHandler = () => {
-      setupAudio();
-      // Don't immediately remove these for iOS - might need multiple interactions
-      setTimeout(() => {
-        if (audioContextRef.current && audioContextRef.current.state === 'running') {
-          // Only remove listeners if we confirmed audio is working
-          document.removeEventListener('click', setupAudioHandler);
-          document.removeEventListener('touchend', setupAudioHandler);
-          document.removeEventListener('touchstart', setupAudioHandler);
-          document.removeEventListener('keydown', setupAudioHandler);
-        }
-      }, 1000);
+      if (!setupHandlerAdded) {
+        setupAudio();
+        setupHandlerAdded = true;
+        
+        // Remove listeners after successful setup with delay for iOS
+        setTimeout(() => {
+          if (audioContextRef.current && (audioContextRef.current.state === 'running' || !isIOS)) {
+            document.removeEventListener('click', setupAudioHandler);
+            document.removeEventListener('touchend', setupAudioHandler);
+            document.removeEventListener('touchstart', setupAudioHandler);
+            document.removeEventListener('keydown', setupAudioHandler);
+            console.log('Audio setup handlers removed');
+          }
+        }, 1000);
+      }
     };
     
     // Add event listeners - iOS compatibility requires touchend and touchstart
-    document.addEventListener('click', setupAudioHandler);
-    document.addEventListener('touchend', setupAudioHandler); // Critical for iOS
-    document.addEventListener('touchstart', setupAudioHandler);
-    document.addEventListener('keydown', setupAudioHandler);
+    document.addEventListener('click', setupAudioHandler, { passive: true });
+    document.addEventListener('touchend', setupAudioHandler, { passive: true }); // Critical for iOS
+    document.addEventListener('touchstart', setupAudioHandler, { passive: true });
+    document.addEventListener('keydown', setupAudioHandler, { passive: true });
     
     // iOS requires a user gesture to initialize audio
     if (typeof navigator !== 'undefined' && /iPhone|iPad|iPod/i.test(navigator.userAgent)) {
       console.log('iOS device detected, displaying audio start instructions...');
       setError('Tap anywhere on the screen to enable audio playback');
+      // Auto-clear this message after a few seconds
+      setTimeout(() => {
+        if (error === 'Tap anywhere on the screen to enable audio playback') {
+          setError(null);
+        }
+      }, 4000);
     }
     
     return () => {
       mounted = false;
+      
+      // Clean up event listeners
       document.removeEventListener('click', setupAudioHandler);
       document.removeEventListener('touchend', setupAudioHandler);
       document.removeEventListener('touchstart', setupAudioHandler);
       document.removeEventListener('keydown', setupAudioHandler);
-      
-      // Also cleanup any audio resources
-      Object.values(audioMap).forEach(audio => {
-        if (audio) {
-          try {
-            audio.pause();
-            audio.src = '';
-            audio.onended = null;
-            audio.ontimeupdate = null;
-            audio.onerror = null;
-          } catch (err) {
-            console.warn('Error cleaning up audio:', err);
-          }
-        }
-      });
       
       // Clear any pending data retry
       if (dataRetryRef.current) {
@@ -461,7 +496,7 @@ export default function App() {
         dataRetryRef.current = null;
       }
     };
-  }, []);
+  }, [error]); // Add error as dependency to handle auto-clear
   
   // Get audio context - only create on demand, not at startup
   const getAudioContext = useCallback(() => {
@@ -984,14 +1019,60 @@ export default function App() {
     }
   };
   
-  // Completely stop a sound (remove it from the mixer)
-  const handleStopSound = (sound) => {
+  // Completely stop a sound (remove it from the mixer) - Improved
+  const handleStopSound = useCallback((sound) => {
     try {
       const audio = audioMap[sound.id];
       if (audio) {
+        // Remove event listeners first
+        try {
+          if (audio.onended) {
+            audio.removeEventListener('ended', audio.onended);
+            audio.onended = null;
+          }
+          if (audio.ontimeupdate) {
+            audio.removeEventListener('timeupdate', audio.ontimeupdate);
+            audio.ontimeupdate = null;
+          }
+          if (audio.onerror) {
+            audio.removeEventListener('error', audio.onerror);
+            audio.onerror = null;
+          }
+        } catch (listenerErr) {
+          console.warn(`Error removing listeners for ${sound.name}:`, listenerErr);
+        }
+        
         // Stop playback
-        audio.pause();
-        audio.currentTime = 0;
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch (stopErr) {
+          console.warn(`Error stopping playback for ${sound.name}:`, stopErr);
+        }
+        
+        // For iOS, cleanup WebAudio connections
+        if (isIOS) {
+          try {
+            if (audioGainNodes.current[sound.id]) {
+              audioGainNodes.current[sound.id].disconnect();
+              delete audioGainNodes.current[sound.id];
+            }
+            
+            if (audioSources.current[sound.id]) {
+              audioSources.current[sound.id].disconnect();
+              delete audioSources.current[sound.id];
+            }
+          } catch (webAudioErr) {
+            console.warn(`Error cleaning up WebAudio for ${sound.name}:`, webAudioErr);
+          }
+        }
+        
+        // Clear source to free memory
+        try {
+          audio.src = '';
+        } catch (srcErr) {
+          console.warn(`Error clearing source for ${sound.name}:`, srcErr);
+        }
         
         // Update state to remove from mixer completely
         setPlaying(prev => {
@@ -1004,11 +1085,39 @@ export default function App() {
           delete newState[sound.id];
           return newState;
         });
+        setAudioPositions(prev => {
+          const newState = { ...prev };
+          delete newState[sound.id];
+          return newState;
+        });
+        setAudioMap(prev => {
+          const newState = { ...prev };
+          delete newState[sound.id];
+          return newState;
+        });
+        setShowVolumeControls(prev => {
+          const newState = { ...prev };
+          delete newState[sound.id];
+          return newState;
+        });
+        
+        console.log(`Successfully stopped and cleaned up sound: ${sound.name}`);
       }
     } catch (err) {
       console.error(`Error stopping sound ${sound.name}:`, err);
+      // Still try to clean up state even if audio cleanup failed
+      setPlaying(prev => {
+        const newState = { ...prev };
+        delete newState[sound.id];
+        return newState;
+      });
+      setPaused(prev => {
+        const newState = { ...prev };
+        delete newState[sound.id];
+        return newState;
+      });
     }
-  };
+  }, [audioMap, isIOS]);
   
   // Handle loop toggle
   const handleLoopToggle = (sound) => {
@@ -1026,94 +1135,150 @@ export default function App() {
     }
   };
   
-  // Handle delete sound
-  const handleDeleteSound = async (id) => {
-    // First stop if playing
-    if (playing[id]) {
+  // Handle delete sound - Improved with proper cleanup
+  const handleDeleteSound = useCallback(async (id) => {
+    try {
+      // First stop the sound if playing to clean up resources
+      const sound = sounds.find(s => s.id === id);
+      if (sound && (playing[id] || paused[id])) {
+        handleStopSound(sound);
+      }
+      
+      // Additional cleanup for any remaining references
       const audio = audioMap[id];
       if (audio) {
-        audio.pause();
-        audio.currentTime = 0;
+        try {
+          // Extra cleanup to ensure no memory leaks
+          audio.pause();
+          audio.currentTime = 0;
+          audio.src = '';
+          audio.load(); // Force cleanup
+        } catch (cleanupErr) {
+          console.warn(`Error during additional cleanup for sound ${id}:`, cleanupErr);
+        }
       }
-      setPlaying(prev => {
+      
+      // Remove from all state objects
+      setAudioMap(prev => {
+        const newMap = { ...prev };
+        delete newMap[id];
+        return newMap;
+      });
+      
+      setLooping(prev => {
         const newState = { ...prev };
         delete newState[id];
         return newState;
       });
-    }
-    
-    // Remove from audio map
-    setAudioMap(prev => {
-      const newMap = { ...prev };
-      delete newMap[id];
-      return newMap;
-    });
-    
-    // Remove from loop map
-    setLooping(prev => {
-      const newState = { ...prev };
-      delete newState[id];
-      return newState;
-    });
-    
-    // Remove from positions map
-    setAudioPositions(prev => {
-      const newState = { ...prev };
-      delete newState[id];
-      return newState;
-    });
-    
-    // Delete from database
-    try {
+      
+      setVolumes(prev => {
+        const newState = { ...prev };
+        delete newState[id];
+        return newState;
+      });
+      
+      setShowVolumeControls(prev => {
+        const newState = { ...prev };
+        delete newState[id];
+        return newState;
+      });
+      
+      // Delete from database
       await deleteSound(id);
+      
+      // Remove from sounds state
       setSounds(prev => prev.filter(sound => sound.id !== id));
+      
+      console.log(`Successfully deleted sound with id: ${id}`);
     } catch (err) {
       console.error("Error deleting sound:", err);
-      setError(`Failed to delete sound: ${err.message}`);
+      setError(`Failed to delete sound: ${err.message || 'Unknown error'}`);
+      
+      // Still try to remove from UI even if database deletion failed
+      setSounds(prev => prev.filter(sound => sound.id !== id));
     }
-  };
+  }, [sounds, playing, paused, audioMap, handleStopSound]);
   
-  // Stop all playing sounds
-  const stopAllSounds = () => {
+  // Stop all playing sounds - Improved with proper cleanup
+  const stopAllSounds = useCallback(() => {
     try {
+      console.log('Stopping all sounds...');
+      
       // Get a list of all sounds in the mixer (playing or paused)
       const allSoundIds = [...Object.keys(playing), ...Object.keys(paused)];
       const uniqueSoundIds = [...new Set(allSoundIds)];
       
-      // Stop each sound individually
+      // Stop each sound individually with proper cleanup
       uniqueSoundIds.forEach(id => {
         const audio = audioMap[id];
         if (audio) {
-          // Remove event listeners
-          audio.onended = null;
-          audio.ontimeupdate = null;
-          audio.oncanplaythrough = null;
-          audio.onerror = null;
-          
-          // Stop playback
           try {
+            // Remove event listeners first to prevent unwanted callbacks
+            if (audio.onended) {
+              audio.removeEventListener('ended', audio.onended);
+              audio.onended = null;
+            }
+            if (audio.ontimeupdate) {
+              audio.removeEventListener('timeupdate', audio.ontimeupdate);
+              audio.ontimeupdate = null;
+            }
+            if (audio.onerror) {
+              audio.removeEventListener('error', audio.onerror);
+              audio.onerror = null;
+            }
+            
+            // Stop playback
             audio.pause();
             audio.currentTime = 0;
+            
+            // For iOS, cleanup WebAudio connections
+            if (isIOS) {
+              if (audioGainNodes.current[id]) {
+                try {
+                  audioGainNodes.current[id].disconnect();
+                  delete audioGainNodes.current[id];
+                } catch (err) {
+                  console.warn(`Error disconnecting gain node for ${id}:`, err);
+                }
+              }
+              
+              if (audioSources.current[id]) {
+                try {
+                  audioSources.current[id].disconnect();
+                  delete audioSources.current[id];
+                } catch (err) {
+                  console.warn(`Error disconnecting audio source for ${id}:`, err);
+                }
+              }
+            }
+            
+            // Clear the audio source to free memory
+            audio.src = '';
+            
           } catch (err) {
             console.warn(`Error stopping sound ${id}:`, err);
           }
-          
-          // Clear source
-          audio.src = '';
         }
       });
       
-      // Clear all states
+      // Clear all states at once
       setPlaying({});
       setPaused({});
       setAudioPositions({});
+      setShowVolumeControls({});
       
-      console.log(`Stopped ${uniqueSoundIds.length} sounds`);
+      // Clear audio map
+      setAudioMap({});
+      
+      // Cancel any pending loading operations
+      cancelLoadingOperations();
+      
+      console.log(`Stopped and cleaned up ${uniqueSoundIds.length} sounds`);
     } catch (err) {
       console.error('Error stopping all sounds:', err);
-      setError('Failed to stop all sounds');
+      setError('Failed to stop all sounds. Try refreshing the page.');
     }
-  };
+  }, [playing, paused, audioMap, isIOS, cancelLoadingOperations]);
   
   // Handle add sound dialog
   const handleAddSoundOpen = () => setAddSoundOpen(true);
@@ -1337,8 +1502,8 @@ export default function App() {
     });
   };
   
-  // Handle volume change with WebAudio API for iPad
-  const handleVolumeChange = (sound, newValue) => {
+  // Handle volume change with WebAudio API for iPad - Improved
+  const handleVolumeChange = useCallback((sound, newValue) => {
     const id = sound.id;
     
     if (!sound) {
@@ -1372,8 +1537,14 @@ export default function App() {
             if (!audioGainNodes.current[id]) {
               console.log(`Creating new gain node for sound ${sound.name}`);
               try {
-                // Create a media element source from the audio element
-                const source = audioContextRef.current.createMediaElementSource(audio);
+                // Check if audio element is already connected to avoid InvalidStateError
+                let source = audioSources.current[id];
+                
+                if (!source) {
+                  // Create a media element source from the audio element
+                  source = audioContextRef.current.createMediaElementSource(audio);
+                  audioSources.current[id] = source;
+                }
                 
                 // Create a gain node for volume control
                 const gainNode = audioContextRef.current.createGain();
@@ -1384,7 +1555,6 @@ export default function App() {
                 
                 // Store references
                 audioGainNodes.current[id] = gainNode;
-                audioSources.current[id] = source;
                 
                 console.log(`WebAudio chain created for ${sound.name}`);
               } catch (err) {
@@ -1392,54 +1562,39 @@ export default function App() {
                 console.warn(`Error creating WebAudio chain for ${sound.name}:`, err);
                 
                 // Fall back to direct volume control with restart approach
-                if (effectiveVolume <= 0.01) {
-                  audio.muted = true;
-                  audio.volume = 0;
-                } else {
-                  const wasPlaying = !audio.paused;
-                  const currentPosition = audio.currentTime;
-                  
-                  // Set volume first then unmute
-                  const clampedVolume = Math.max(0.1, Math.min(1, effectiveVolume));
-                  audio.volume = clampedVolume;
-                  audio.muted = false;
-                  
-                  if (wasPlaying) {
-                    // Force a restart to apply volume
-                    audio.pause();
-                    setTimeout(() => {
-                      audio.currentTime = currentPosition;
-                      audio.play().catch(err => console.warn('Play failed:', err));
-                    }, 50);
-                  }
-                }
+                fallbackVolumeControl(audio, sound.name, effectiveVolume);
                 return;
               }
             }
             
             // Use gain node to control volume
             const gainNode = audioGainNodes.current[id];
-            if (gainNode) {
-              // Set the gain value (volume)
-              if (effectiveVolume <= 0.01) {
-                gainNode.gain.value = 0;
-                audio.muted = true; // Also mute for good measure
-              } else {
-                // Unmute if needed
-                audio.muted = false;
-                
-                // Set gain value - this controls the volume in WebAudio API
-                const now = audioContextRef.current.currentTime;
-                
-                // Smooth transition to new volume
-                gainNode.gain.cancelScheduledValues(now);
-                gainNode.gain.setValueAtTime(gainNode.gain.value, now);
-                gainNode.gain.linearRampToValueAtTime(effectiveVolume, now + 0.1);
-                
-                console.log(`Set gain for ${sound.name} to ${effectiveVolume}`);
+            if (gainNode && gainNode.gain) {
+              try {
+                // Set the gain value (volume)
+                if (effectiveVolume <= 0.01) {
+                  gainNode.gain.value = 0;
+                  audio.muted = true; // Also mute for good measure
+                } else {
+                  // Unmute if needed
+                  audio.muted = false;
+                  
+                  // Set gain value - this controls the volume in WebAudio API
+                  const now = audioContextRef.current.currentTime;
+                  
+                  // Smooth transition to new volume
+                  gainNode.gain.cancelScheduledValues(now);
+                  gainNode.gain.setValueAtTime(gainNode.gain.value || 0, now);
+                  gainNode.gain.linearRampToValueAtTime(effectiveVolume, now + 0.1);
+                  
+                  console.log(`Set gain for ${sound.name} to ${effectiveVolume}`);
+                }
+              } catch (gainErr) {
+                console.warn(`Error setting gain for ${sound.name}:`, gainErr);
+                fallbackVolumeControl(audio, sound.name, effectiveVolume);
               }
             } else {
-              console.warn(`No gain node found for ${sound.name}`);
+              console.warn(`No valid gain node found for ${sound.name}`);
               // Fall back to direct control with restart approach
               fallbackVolumeControl(audio, sound.name, effectiveVolume);
             }
@@ -1469,11 +1624,12 @@ export default function App() {
       }
     }
     
-    // Save volume preference for next play
+    // Save volume preference for next play - with error handling
     saveSound(updatedSound).catch(err => {
       console.error("Failed to save volume setting:", err);
+      // Don't show error to user for volume save failures
     });
-  };
+  }, [audioMap, masterVolume, isIOS]);
   
   // Fallback volume control function for iPad when WebAudio API is not available
   const fallbackVolumeControl = (audio, soundName, effectiveVolume) => {
@@ -1931,82 +2087,98 @@ export default function App() {
     );
   };
   
-  // Apply master volume to all playing sounds using WebAudio when possible
+  // Apply master volume to all playing sounds using WebAudio when possible - Improved
   useEffect(() => {
-    // Apply master volume to all currently playing audio elements
-    Object.entries(audioMap).forEach(([id, audio]) => {
-      if (audio) {
-        try {
-          // Calculate effective volume (soundVolume * masterVolume)
-          const sound = sounds.find(s => s.id === id);
-          if (sound) {
-            const soundVolume = sound.volume || 0.7;
-            const effectiveVolume = soundVolume * masterVolume;
-            
-            console.log(`Master volume changed: Applying to ${sound.name}, base vol=${soundVolume}, master=${masterVolume}, effective=${effectiveVolume}`);
-            
-            // Check if we have a gain node for this sound
-            if (isIOS && audioGainNodes.current[id] && audioContextRef.current?.state === 'running') {
-              // Use WebAudio API for reliable volume control on iOS
-              const gainNode = audioGainNodes.current[id];
-              
-              // Apply volume through gain node
-              if (effectiveVolume <= 0.01) {
-                // For muting
-                gainNode.gain.value = 0;
-                audio.muted = true; // For good measure
-              } else {
-                // For volume change
-                audio.muted = false;
-                
-                // Smooth transition
-                const now = audioContextRef.current.currentTime;
-                gainNode.gain.cancelScheduledValues(now);
-                gainNode.gain.setValueAtTime(gainNode.gain.value, now);
-                gainNode.gain.linearRampToValueAtTime(effectiveVolume, now + 0.1);
-                
-                console.log(`Set master gain for ${sound.name} to ${effectiveVolume} via WebAudio`);
-              }
-            } else if (isIOS) {
-              // Fallback to our specialized iOS volume control
-              fallbackVolumeControl(audio, sound.name, effectiveVolume);
-            } else {
-              // Normal handling for non-iOS
-              // Force true muting when master volume is near zero
-              if (masterVolume <= 0.01) {
-                console.log(`Setting master mute on ${sound.name}`);
-                audio.muted = true;
-                audio.volume = 0;
-              } 
-              // Or when the effective volume is near zero
-              else if (effectiveVolume <= 0.01) {
-                console.log(`Setting effective mute on ${sound.name}`);
-                audio.muted = true;
-                audio.volume = 0;
-              } else {
-                audio.muted = false;
-                audio.volume = Math.max(0, Math.min(1, effectiveVolume));
-              }
-            }
-          }
-        } catch (err) {
-          console.warn(`Error adjusting volume for sound ${id}:`, err);
-          
-          // Last resort fallback
+    // Debounce master volume changes to prevent excessive updates
+    const timeoutId = setTimeout(() => {
+      // Apply master volume to all currently playing audio elements
+      Object.entries(audioMap).forEach(([id, audio]) => {
+        if (audio) {
           try {
-            if (isIOS && audio) {
-              const sound = sounds.find(s => s.id === id);
-              const soundVolume = sound?.volume || 0.7;
+            // Calculate effective volume (soundVolume * masterVolume)
+            const sound = sounds.find(s => s.id === id);
+            if (sound) {
+              const soundVolume = sound.volume || 0.7;
               const effectiveVolume = soundVolume * masterVolume;
-              fallbackVolumeControl(audio, sound?.name || id, effectiveVolume);
+              
+              console.log(`Master volume changed: Applying to ${sound.name}, base vol=${soundVolume}, master=${masterVolume}, effective=${effectiveVolume}`);
+              
+              // Check if we have a gain node for this sound
+              if (isIOS && audioGainNodes.current[id] && audioContextRef.current?.state === 'running') {
+                // Use WebAudio API for reliable volume control on iOS
+                const gainNode = audioGainNodes.current[id];
+                
+                try {
+                  // Apply volume through gain node
+                  if (effectiveVolume <= 0.01) {
+                    // For muting
+                    gainNode.gain.value = 0;
+                    audio.muted = true; // For good measure
+                  } else {
+                    // For volume change
+                    audio.muted = false;
+                    
+                    // Smooth transition
+                    const now = audioContextRef.current.currentTime;
+                    gainNode.gain.cancelScheduledValues(now);
+                    gainNode.gain.setValueAtTime(gainNode.gain.value || 0, now);
+                    gainNode.gain.linearRampToValueAtTime(effectiveVolume, now + 0.1);
+                    
+                    console.log(`Set master gain for ${sound.name} to ${effectiveVolume} via WebAudio`);
+                  }
+                } catch (gainErr) {
+                  console.warn(`Error setting master gain for ${sound.name}:`, gainErr);
+                  // Fallback to direct volume control
+                  fallbackVolumeControl(audio, sound.name, effectiveVolume);
+                }
+              } else if (isIOS) {
+                // Fallback to our specialized iOS volume control
+                fallbackVolumeControl(audio, sound.name, effectiveVolume);
+              } else {
+                // Normal handling for non-iOS
+                try {
+                  // Force true muting when master volume is near zero
+                  if (masterVolume <= 0.01) {
+                    console.log(`Setting master mute on ${sound.name}`);
+                    audio.muted = true;
+                    audio.volume = 0;
+                  } 
+                  // Or when the effective volume is near zero
+                  else if (effectiveVolume <= 0.01) {
+                    console.log(`Setting effective mute on ${sound.name}`);
+                    audio.muted = true;
+                    audio.volume = 0;
+                  } else {
+                    audio.muted = false;
+                    audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+                  }
+                } catch (volumeErr) {
+                  console.warn(`Error setting direct volume for ${sound.name}:`, volumeErr);
+                }
+              }
             }
-          } catch (fallbackErr) {
-            console.error("Fallback volume control failed:", fallbackErr);
+          } catch (err) {
+            console.warn(`Error adjusting volume for sound ${id}:`, err);
+            
+            // Last resort fallback
+            try {
+              if (isIOS && audio) {
+                const sound = sounds.find(s => s.id === id);
+                const soundVolume = sound?.volume || 0.7;
+                const effectiveVolume = soundVolume * masterVolume;
+                fallbackVolumeControl(audio, sound?.name || id, effectiveVolume);
+              }
+            } catch (fallbackErr) {
+              console.error("Fallback volume control failed:", fallbackErr);
+            }
           }
         }
-      }
-    });
-  }, [masterVolume, audioMap, sounds]);
+      });
+    }, 50); // Debounce with 50ms delay
+    
+    // Cleanup timeout on unmount or dependency change
+    return () => clearTimeout(timeoutId);
+  }, [masterVolume, audioMap, sounds, isIOS]);
   
   // Toggle the mixer drawer
   const toggleMixer = () => {
@@ -2020,6 +2192,136 @@ export default function App() {
   
   // Get the count of currently playing sounds
   const playingSoundsCount = Object.values(playing).filter(Boolean).length;
+  
+  // Comprehensive cleanup function for audio resources
+  const cleanupAudioResources = useCallback(() => {
+    try {
+      // Stop and cleanup all audio elements
+      Object.entries(audioMap).forEach(([id, audio]) => {
+        if (audio) {
+          try {
+            // Remove event listeners first
+            audio.removeEventListener('ended', audio.onended);
+            audio.removeEventListener('timeupdate', audio.ontimeupdate);
+            audio.removeEventListener('error', audio.onerror);
+            
+            // Stop playback
+            audio.pause();
+            audio.currentTime = 0;
+            
+            // Clear source to free memory
+            audio.src = '';
+            audio.load(); // Force cleanup
+            
+            // Clear event handlers
+            audio.onended = null;
+            audio.ontimeupdate = null;
+            audio.onerror = null;
+            audio.oncanplaythrough = null;
+          } catch (err) {
+            console.warn(`Error cleaning up audio ${id}:`, err);
+          }
+        }
+      });
+      
+      // Cleanup WebAudio resources for iOS
+      if (isIOS) {
+        Object.entries(audioGainNodes.current).forEach(([id, gainNode]) => {
+          try {
+            if (gainNode && gainNode.disconnect) {
+              gainNode.disconnect();
+            }
+          } catch (err) {
+            console.warn(`Error disconnecting gain node ${id}:`, err);
+          }
+        });
+        
+        Object.entries(audioSources.current).forEach(([id, source]) => {
+          try {
+            if (source && source.disconnect) {
+              source.disconnect();
+            }
+          } catch (err) {
+            console.warn(`Error disconnecting audio source ${id}:`, err);
+          }
+        });
+        
+        // Clear the references
+        audioGainNodes.current = {};
+        audioSources.current = {};
+      }
+      
+      // Clear all state
+      setAudioMap({});
+      setPlaying({});
+      setPaused({});
+      setAudioPositions({});
+      setLooping({});
+      setShowVolumeControls({});
+      
+      console.log('Audio resources cleaned up successfully');
+    } catch (err) {
+      console.error('Error during audio cleanup:', err);
+    }
+  }, [isIOS]); // Removed audioMap from dependencies to prevent infinite loop
+  
+  // Add cleanup to component unmount
+  useEffect(() => {
+    return () => {
+      cleanupAudioResources();
+    };
+  }, [cleanupAudioResources]);
+  
+  // Error boundary effect to catch and handle unexpected errors
+  useEffect(() => {
+    const handleError = (event) => {
+      console.error('Uncaught error:', event.error);
+      setError(`Unexpected error: ${event.error?.message || 'Unknown error'}. Try refreshing the page.`);
+    };
+    
+    const handleUnhandledRejection = (event) => {
+      console.error('Unhandled promise rejection:', event.reason);
+      setError(`Promise error: ${event.reason?.message || 'Unknown error'}. Try refreshing the page.`);
+    };
+    
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+  
+  // Performance monitoring for large numbers of sounds
+  useEffect(() => {
+    if (sounds.length > 50) {
+      console.warn(`Large number of sounds detected (${sounds.length}). This may impact performance.`);
+      setError(`You have ${sounds.length} sounds. Consider organizing them into categories for better performance.`);
+      setTimeout(() => setError(null), 8000);
+    }
+  }, [sounds.length]);
+  
+  // Monitor audio context state and attempt recovery if needed
+  useEffect(() => {
+    if (!audioContextRef.current) return;
+    
+    const monitorAudioContext = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'interrupted') {
+        console.warn('AudioContext interrupted, attempting recovery...');
+        setTimeout(() => {
+          if (audioContextRef.current && audioContextRef.current.state === 'interrupted') {
+            audioContextRef.current.resume().catch(err => {
+              console.error('Failed to resume interrupted AudioContext:', err);
+            });
+          }
+        }, 1000);
+      }
+    };
+    
+    const intervalId = setInterval(monitorAudioContext, 5000);
+    return () => clearInterval(intervalId);
+  }, [audioContextInitialized]);
   
   return (
     <ThemeProvider theme={theme}>
@@ -2043,6 +2345,11 @@ export default function App() {
             boxShadow: 3,
             position: 'relative',
             WebkitTapHighlightColor: 'transparent', // Remove tap highlight on iOS
+            // Improve touch responsiveness on iPad
+            touchAction: 'manipulation',
+            WebkitTouchCallout: 'none',
+            WebkitUserSelect: 'none',
+            userSelect: 'none',
           }}>
             {/* Header */}
             <AppBar position="static" color="primary" elevation={0} 
